@@ -110,34 +110,56 @@ def _detect_storage(bag_path: Path) -> Optional[str]:
 # Writers
 # ---------------------------------------------------------------------------
 
-def _write_topic_entry(out_dir: Path, topic_name: str, msg_type: str, t: float,
-                       raw: Any, img_bytes: Optional[bytes] = None) -> None:
-    tdir = out_dir / slug(topic_name)
-    tdir.mkdir(parents=True, exist_ok=True)
+class _TopicWriter:
+    """Per-topic sink with a long-lived file handle. Opening data.jsonl per
+    message (the previous approach) dominated indexing time on large bags;
+    latest.json / latest.jpg are only written once, on close()."""
 
-    if img_bytes is not None:
-        (tdir / f"{t:.3f}.jpg").write_bytes(img_bytes)
-        (tdir / "latest.jpg").write_bytes(img_bytes)
-        entry = {"t": t, "type": "image", "frame": f"{t:.3f}.jpg"}
-    else:
-        if not isinstance(raw, dict):
-            raw = {"_raw_str": str(raw)}
-        entry = {"t": t, "_raw": raw}
-        if "JointState" in msg_type and "name" in raw:
-            entry["__names"]  = raw.get("name", [])
-            entry["position"] = raw.get("position", [])
-            entry["velocity"] = raw.get("velocity", [])
-            entry["effort"]   = raw.get("effort", [])
-        elif is_numeric_type(msg_type):
-            # Top-level numeric fields so chart panels can plot without _raw
-            entry.update(_numeric_summary(raw))
-        (tdir / "latest.json").write_text(
-            json.dumps({"t": t, "topic": topic_name, "msg_type": msg_type, **entry}),
-            encoding="utf-8",
-        )
+    def __init__(self, out_dir: Path, topic: str, msg_type: str) -> None:
+        self.topic    = topic
+        self.msg_type = msg_type
+        self.tdir     = out_dir / slug(topic)
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        self._jsonl = (self.tdir / "data.jsonl").open("a", encoding="utf-8")
+        self._last_entry: Optional[dict] = None
+        self._last_img:   Optional[bytes] = None
 
-    with (tdir / "data.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    def timestamp_only(self, t: float) -> None:
+        self._jsonl.write(json.dumps({"t": t}) + "\n")
+
+    def add(self, t: float, raw: Any, img_bytes: Optional[bytes] = None) -> None:
+        if img_bytes is not None:
+            (self.tdir / f"{t:.3f}.jpg").write_bytes(img_bytes)
+            self._last_img = img_bytes
+            entry = {"t": t, "type": "image", "frame": f"{t:.3f}.jpg"}
+        else:
+            if not isinstance(raw, dict):
+                raw = {"_raw_str": str(raw)}
+            entry = {"t": t, "_raw": raw}
+            if "JointState" in self.msg_type and "name" in raw:
+                entry["__names"]  = raw.get("name", [])
+                entry["position"] = raw.get("position", [])
+                entry["velocity"] = raw.get("velocity", [])
+                entry["effort"]   = raw.get("effort", [])
+            elif is_numeric_type(self.msg_type):
+                # Top-level numeric fields so chart panels can plot without _raw
+                entry.update(_numeric_summary(raw))
+            self._last_entry = entry
+        self._jsonl.write(json.dumps(entry) + "\n")
+
+    def close(self) -> None:
+        try:
+            self._jsonl.close()
+        except Exception:
+            pass
+        if self._last_img is not None:
+            (self.tdir / "latest.jpg").write_bytes(self._last_img)
+        if self._last_entry is not None:
+            (self.tdir / "latest.json").write_text(
+                json.dumps({"t": self._last_entry["t"], "topic": self.topic,
+                            "msg_type": self.msg_type, **self._last_entry}),
+                encoding="utf-8",
+            )
 
 
 def _write_index(out_dir: Path, topic_info: dict, t_start: float, t_end: float) -> None:
@@ -187,50 +209,56 @@ def _preprocess_mcap(bag_path: Path, out_dir: Path) -> None:
                     total += 1
 
     topic_info: dict = {}
+    writers: dict[str, _TopicWriter] = {}
     t_start = t_end = None
     processed = 0
     last_pct = -1
 
-    for mf in mcap_files:
-        with mf.open("rb") as f:
-            reader = make_reader(f, decoder_factories=[DecoderFactory()])
-            for schema, channel, message, decoded in reader.iter_decoded_messages():
-                processed += 1
-                pct = int(processed / max(1, total) * 100)
-                if pct != last_pct:
-                    last_pct = pct
-                    session.set_progress(f"Processing… {pct}% ({processed}/{total} msgs)")
+    try:
+        for mf in mcap_files:
+            with mf.open("rb") as f:
+                reader = make_reader(f, decoder_factories=[DecoderFactory()])
+                for schema, channel, message, decoded in reader.iter_decoded_messages():
+                    processed += 1
+                    pct = int(processed / max(1, total) * 100)
+                    if pct != last_pct:
+                        last_pct = pct
+                        session.set_progress(f"Processing… {pct}% ({processed}/{total} msgs)")
 
-                t        = message.log_time / 1e9
-                topic    = channel.topic
-                msg_type = schema.name if schema else "unknown"
+                    t        = message.log_time / 1e9
+                    topic    = channel.topic
+                    msg_type = schema.name if schema else "unknown"
 
-                t_start = t if t_start is None else min(t_start, t)
-                t_end   = t if t_end   is None else max(t_end,   t)
+                    t_start = t if t_start is None else min(t_start, t)
+                    t_end   = t if t_end   is None else max(t_end,   t)
 
-                ti = topic_info.setdefault(topic, _new_topic_info(msg_type, topic, t))
-                ti["count"] += 1
-                ti["t_start"] = min(ti["t_start"], t)
-                ti["t_end"]   = max(ti["t_end"],   t)
+                    ti = topic_info.setdefault(topic, _new_topic_info(msg_type, topic, t))
+                    ti["count"] += 1
+                    ti["t_start"] = min(ti["t_start"], t)
+                    ti["t_end"]   = max(ti["t_end"],   t)
 
-                if msg_type in SKIP_TYPES:
-                    tdir = out_dir / slug(topic)
-                    tdir.mkdir(parents=True, exist_ok=True)
-                    with (tdir / "data.jsonl").open("a", encoding="utf-8") as fh:
-                        fh.write(json.dumps({"t": t}) + "\n")
-                    continue
+                    w = writers.get(topic)
+                    if w is None:
+                        w = writers[topic] = _TopicWriter(out_dir, topic, msg_type)
 
-                raw = {}
-                try:
-                    raw = _decoded_to_dict(decoded)
-                except Exception:
-                    pass
+                    if msg_type in SKIP_TYPES:
+                        w.timestamp_only(t)
+                        continue
 
-                img_bytes = None
-                if "Image" in msg_type:
-                    img_bytes = _decode_image_bytes(decoded, msg_type)
+                    raw = {}
+                    try:
+                        raw = _decoded_to_dict(decoded)
+                    except Exception:
+                        pass
 
-                _write_topic_entry(out_dir, topic, msg_type, t, raw, img_bytes)
+                    img_bytes = None
+                    if "Image" in msg_type:
+                        img_bytes = _decode_image_bytes(decoded, msg_type)
+
+                    w.add(t, raw, img_bytes)
+    finally:
+        for w in writers.values():
+            w.close()
 
     _write_index(out_dir, topic_info, t_start or 0, t_end or 0)
 
@@ -243,53 +271,62 @@ def _preprocess_sqlite(bag_path: Path, out_dir: Path) -> None:
     import sqlite3
 
     topic_info: dict = {}
+    writers: dict[str, _TopicWriter] = {}
+    msg_classes: dict[str, Any] = {}
     t_start = t_end = None
 
-    for db_file in sorted(bag_path.glob("*.db3")):
-        session.set_progress(f"Processing {db_file.name}…")
-        conn = sqlite3.connect(str(db_file))
-        cur = conn.cursor()
+    try:
+        for db_file in sorted(bag_path.glob("*.db3")):
+            session.set_progress(f"Processing {db_file.name}…")
+            conn = sqlite3.connect(str(db_file))
+            cur = conn.cursor()
 
-        cur.execute("SELECT id, name, type FROM topics")
-        topics_map = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+            cur.execute("SELECT id, name, type FROM topics")
+            topics_map = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
-        cur.execute("SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
-        for topic_id, ts_ns, data in cur.fetchall():
-            if topic_id not in topics_map:
-                continue
-            topic_name, msg_type = topics_map[topic_id]
-            t = ts_ns / 1e9
+            cur.execute("SELECT topic_id, timestamp, data FROM messages ORDER BY timestamp")
+            for topic_id, ts_ns, data in cur:
+                if topic_id not in topics_map:
+                    continue
+                topic_name, msg_type = topics_map[topic_id]
+                t = ts_ns / 1e9
 
-            t_start = t if t_start is None else min(t_start, t)
-            t_end   = t if t_end   is None else max(t_end,   t)
+                t_start = t if t_start is None else min(t_start, t)
+                t_end   = t if t_end   is None else max(t_end,   t)
 
-            ti = topic_info.setdefault(topic_name, _new_topic_info(msg_type, topic_name, t))
-            ti["count"] += 1
-            ti["t_start"] = min(ti["t_start"], t)
-            ti["t_end"]   = max(ti["t_end"], t)
+                ti = topic_info.setdefault(topic_name, _new_topic_info(msg_type, topic_name, t))
+                ti["count"] += 1
+                ti["t_start"] = min(ti["t_start"], t)
+                ti["t_end"]   = max(ti["t_end"], t)
 
-            if msg_type in SKIP_TYPES:
-                tdir = out_dir / slug(topic_name)
-                tdir.mkdir(parents=True, exist_ok=True)
-                with (tdir / "data.jsonl").open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"t": t}) + "\n")
-                continue
+                w = writers.get(topic_name)
+                if w is None:
+                    w = writers[topic_name] = _TopicWriter(out_dir, topic_name, msg_type)
 
-            raw = {}
-            img_bytes = None
-            try:
-                from rclpy.serialization import deserialize_message
-                from rosidl_runtime_py.utilities import get_message
-                msg = deserialize_message(bytes(data), get_message(msg_type))
-                raw = _decoded_to_dict(msg)
-                if "Image" in msg_type:
-                    img_bytes = _decode_image_bytes(msg, msg_type)
-            except Exception:
-                pass
+                if msg_type in SKIP_TYPES:
+                    w.timestamp_only(t)
+                    continue
 
-            _write_topic_entry(out_dir, topic_name, msg_type, t, raw, img_bytes)
+                raw = {}
+                img_bytes = None
+                try:
+                    from rclpy.serialization import deserialize_message
+                    if msg_type not in msg_classes:
+                        from rosidl_runtime_py.utilities import get_message
+                        msg_classes[msg_type] = get_message(msg_type)
+                    msg = deserialize_message(bytes(data), msg_classes[msg_type])
+                    raw = _decoded_to_dict(msg)
+                    if "Image" in msg_type:
+                        img_bytes = _decode_image_bytes(msg, msg_type)
+                except Exception:
+                    pass
 
-        conn.close()
+                w.add(t, raw, img_bytes)
+
+            conn.close()
+    finally:
+        for w in writers.values():
+            w.close()
 
     _write_index(out_dir, topic_info, t_start or 0, t_end or 0)
 
@@ -346,9 +383,16 @@ def _decoded_to_dict(msg: Any) -> dict:
 
 
 def _decode_image_bytes(msg: Any, msg_type: str) -> Optional[bytes]:
-    """JPEG-encode an Image/CompressedImage message. Returns None if the
-    OpenCV / cv_bridge stack isn't available (dashboard degrades gracefully)."""
+    """JPEG bytes for an Image/CompressedImage message. CompressedImage
+    frames that are already JPEG are passed through untouched — decoding and
+    re-encoding them dominated indexing time on camera-heavy bags. Returns
+    None if the OpenCV / cv_bridge stack isn't available (dashboard degrades
+    gracefully)."""
     try:
+        if "Compressed" in msg_type:
+            fmt = str(getattr(msg, "format", "")).lower()
+            if "jpeg" in fmt or "jpg" in fmt:
+                return bytes(msg.data)
         import cv2
         import numpy as np
         if "Compressed" in msg_type:
