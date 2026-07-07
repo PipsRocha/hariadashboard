@@ -107,7 +107,7 @@ function Panel({ panel, topicMeta, onClose, onBringToFront, zIndex, currentTime 
   useEffect(() => {
     if (!panel.slug) return;
     const now = Date.now();
-    if (now - lastFetch.current < 120) return;
+    if (now - lastFetch.current < 200) return;
     lastFetch.current = now;
     if (panelType === 'image') {
       const t = currentTime !== null ? `?t=${currentTime}&ts=${now}` : `?ts=${now}`;

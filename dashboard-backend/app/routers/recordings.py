@@ -1,0 +1,124 @@
+from datetime import datetime
+from typing import Optional
+import json
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from app.services.recorder import recorder, list_bags, RECORDINGS_DIR
+from app.services.bag_reader import get_bag_info
+
+router = APIRouter(prefix="/recordings", tags=["recordings"])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+class StartRequest(BaseModel):
+    topics: list[str] = Field(..., min_length=1, examples=[["/chatter", "/tf"]])
+    name: Optional[str] = Field(None, description="Optional bag folder name")
+
+
+class StatusResponse(BaseModel):
+    active: bool
+    bag_path: Optional[str] = None
+    topics: list[str] = []
+    started_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Recorder control
+# ---------------------------------------------------------------------------
+
+@router.get("/status", response_model=StatusResponse)
+async def status():
+    s = recorder.state
+    return StatusResponse(
+        active=s.is_active,
+        bag_path=str(s.bag_path) if s.bag_path else None,
+        topics=s.topics,
+        started_at=s.started_at,
+    )
+
+
+@router.post("/start", response_model=StatusResponse)
+async def start(req: StartRequest):
+    try:
+        s = await recorder.start(req.topics, name=req.name)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return StatusResponse(
+        active=s.is_active,
+        bag_path=str(s.bag_path) if s.bag_path else None,
+        topics=s.topics,
+        started_at=s.started_at,
+    )
+
+
+@router.post("/stop", response_model=StatusResponse)
+async def stop():
+    try:
+        s = await recorder.stop()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return StatusResponse(
+        active=False,
+        bag_path=str(s.bag_path) if s.bag_path else None,
+        topics=s.topics,
+        started_at=s.started_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Listing & metadata
+# ---------------------------------------------------------------------------
+
+@router.get("")
+def list_recordings():
+    return list_bags()
+
+
+@router.get("/{name}/info")
+def recording_info(name: str):
+    bag_path = RECORDINGS_DIR / name
+    if not bag_path.exists():
+        raise HTTPException(status_code=404, detail=f"Recording {name!r} not found")
+    info = get_bag_info(bag_path)
+    return {
+        "start_time_ns": info.start_time_ns,
+        "end_time_ns":   info.end_time_ns,
+        "duration_ns":   info.duration_ns,
+        "topics": [
+            {
+                "name":          t.name,
+                "msg_type":      t.msg_type,
+                "message_count": t.message_count,
+            }
+            for t in info.topics
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Annotations
+# ---------------------------------------------------------------------------
+
+@router.get("/{name}/annotations")
+def get_annotations(name: str):
+    ann_file = RECORDINGS_DIR / name / "annotations.json"
+    if not ann_file.exists():
+        return []
+    return json.loads(ann_file.read_text())
+
+
+@router.post("/{name}/annotations")
+def save_annotations(name: str, annotations: list[dict]):
+    bag_path = RECORDINGS_DIR / name
+    if not bag_path.exists():
+        raise HTTPException(status_code=404, detail=f"Recording {name!r} not found")
+    ann_file = bag_path / "annotations.json"
+    ann_file.write_text(json.dumps(annotations, indent=2))
+    return {"ok": True}

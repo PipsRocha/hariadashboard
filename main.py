@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from cv_bridge import CvBridge
+
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -352,7 +354,7 @@ def _decode_image_bytes(msg: Any, msg_type: str) -> Optional[bytes]:
             arr   = np.frombuffer(msg.data, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         else:
-            from cv_bridge import CvBridge
+            #from cv_bridge import CvBridge
             frame = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         return buf.tobytes() if ok else None
