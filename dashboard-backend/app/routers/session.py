@@ -15,12 +15,33 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from app.config import RECORDINGS_DIR, SESSION_OUT_DIR
 from app.services import bag_indexer
 from app.services.session_state import session
 
 router = APIRouter(tags=["session"])
+
+
+# ---------------------------------------------------------------------------
+# Open an existing recording (no upload round-trip needed)
+# ---------------------------------------------------------------------------
+
+class OpenRequest(BaseModel):
+    name: str
+
+
+@router.post("/playback/open")
+async def playback_open(req: OpenRequest, background_tasks: BackgroundTasks):
+    bag_dir = (RECORDINGS_DIR / req.name).resolve()
+    if RECORDINGS_DIR.resolve() not in bag_dir.parents or not bag_dir.is_dir():
+        raise HTTPException(404, f"Recording {req.name!r} not found")
+
+    session.set_bag(bag_dir)
+    session.set_status("processing", "Queued…")
+    background_tasks.add_task(bag_indexer.preprocess_bag, bag_dir, SESSION_OUT_DIR)
+    return {"status": "processing", "path": str(bag_dir)}
 
 
 # ---------------------------------------------------------------------------

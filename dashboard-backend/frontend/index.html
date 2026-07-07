@@ -107,8 +107,34 @@ function PlaybackUpload({ onStart, onBack }) {
   const [procState, setProcState]       = useState('idle');
   const [procMsg, setProcMsg]           = useState('');
   const [dragging, setDragging]         = useState(false);
+  const [recordings, setRecordings]     = useState([]);
   const fileRef = useRef();
   const pollRef = useRef();
+
+  useEffect(() => {
+    fetch(`${API}/recordings`)
+      .then(r => r.ok ? r.json() : [])
+      .then(arr => {
+        if (!Array.isArray(arr)) return;
+        const usable = arr.filter(r => r.has_metadata || (r.mcap_files || []).length > 0);
+        usable.sort((a, b) => (b.start_time_ns || 0) - (a.start_time_ns || 0));
+        setRecordings(usable);
+      })
+      .catch(() => {});
+  }, []);
+
+  function startPolling() {
+    setProcState('processing'); setProcMsg('Processing bag…');
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const r2 = await fetch(`${API}/playback/status`);
+        const d2 = await r2.json();
+        setProcState(d2.state); setProcMsg(d2.progress || d2.error || '');
+        if (d2.state === 'ready' || d2.state === 'error') clearInterval(pollRef.current);
+      } catch {}
+    }, 800);
+  }
 
   async function upload(file) {
     setUploadStatus(`Uploading ${file.name}…`); setStatusType(''); setProcState('idle');
@@ -118,16 +144,20 @@ function PlaybackUpload({ onStart, onBack }) {
       if (!r.ok) throw new Error(await r.text());
       const d = await r.json();
       setUploadStatus(`Uploaded → ${d.path}`); setStatusType('ok');
-      setProcState('processing'); setProcMsg('Processing bag…');
-      clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        try {
-          const r2 = await fetch(`${API}/playback/status`);
-          const d2 = await r2.json();
-          setProcState(d2.state); setProcMsg(d2.progress || d2.error || '');
-          if (d2.state === 'ready' || d2.state === 'error') clearInterval(pollRef.current);
-        } catch {}
-      }, 800);
+      startPolling();
+    } catch(e) { setUploadStatus(String(e)); setStatusType('err'); }
+  }
+
+  async function openRecording(name) {
+    setUploadStatus(`Opening ${name}…`); setStatusType(''); setProcState('idle');
+    try {
+      const r = await fetch(`${API}/playback/open`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setUploadStatus(`Opened → ${name}`); setStatusType('ok');
+      startPolling();
     } catch(e) { setUploadStatus(String(e)); setStatusType('err'); }
   }
 
@@ -143,7 +173,31 @@ function PlaybackUpload({ onStart, onBack }) {
       </div>
       <div className="upload-body">
         <div className="upload-inner">
-          <div className="upload-title">Select ROS 2 bag file</div>
+          {recordings.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <div className="upload-title">Open a recording</div>
+              <div style={{ border:'1px solid var(--black)', maxHeight:190, overflowY:'auto' }}>
+                {recordings.map(rec => (
+                  <div key={rec.name}
+                    onClick={() => openRecording(rec.name)}
+                    style={{ display:'flex', justifyContent:'space-between', gap:12,
+                             padding:'9px 12px', cursor:'pointer',
+                             borderBottom:'1px solid var(--g5)',
+                             fontFamily:'var(--mono)', fontSize:12 }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--g6)'}
+                    onMouseLeave={e => e.currentTarget.style.background = ''}
+                  >
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{rec.name}</span>
+                    <span style={{ color:'var(--g3)', flexShrink:0 }}>
+                      {rec.duration_ns ? `${(rec.duration_ns / 1e9).toFixed(1)}s · ` : ''}
+                      {(rec.size_bytes / 1e6).toFixed(1)} MB
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="upload-title">{recordings.length > 0 ? 'Or upload a bag file' : 'Select ROS 2 bag file'}</div>
           <div className={`drop-zone${dragging ? ' drag-over' : ''}`}
             onClick={() => fileRef.current.click()}
             onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -183,30 +237,38 @@ function Dashboard({ mode, onStop }) {
   const [openTopics, setOpenTopics]     = useState(new Set());
   const [annotations, setAnnotations]   = useState([]);
   const [annCollapsed, setAnnCollapsed] = useState(false);
-  const annLoaded = useRef(false);
-  const annSaveT  = useRef(null);
-
   // Annotations persist as annotations.json next to the bag's .mcap/metadata.yaml.
+  // savedRef holds the last state known to be on disk; Stop prompts if they differ.
+  const savedRef = useRef('[]');
+
   useEffect(() => {
     fetch(`${API}/session/annotations`)
       .then(r => r.ok ? r.json() : [])
-      .then(arr => { if (Array.isArray(arr)) setAnnotations(arr); })
-      .catch(() => {})
-      .finally(() => { annLoaded.current = true; });
+      .then(arr => {
+        if (Array.isArray(arr)) { savedRef.current = JSON.stringify(arr); setAnnotations(arr); }
+      })
+      .catch(() => {});
   }, []);
 
+  // Warn before closing the tab with unsaved annotation changes.
   useEffect(() => {
-    if (!annLoaded.current) return;
-    clearTimeout(annSaveT.current);
-    annSaveT.current = setTimeout(() => {
-      fetch(`${API}/session/annotations`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(annotations),
-      }).catch(() => {});
-    }, 400);
-    return () => clearTimeout(annSaveT.current);
+    function onBeforeUnload(e) {
+      if (JSON.stringify(annotations) !== savedRef.current) {
+        e.preventDefault(); e.returnValue = '';
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [annotations]);
+
+  async function saveAnnotations() {
+    const body = JSON.stringify(annotations);
+    const r = await fetch(`${API}/session/annotations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (!r.ok) throw new Error(await r.text());
+    savedRef.current = body;
+  }
 
   useEffect(() => {
     async function poll() {
@@ -243,6 +305,15 @@ function Dashboard({ mode, onStop }) {
     URL.revokeObjectURL(url);
   }
   async function handleStop() {
+    if (JSON.stringify(annotations) !== savedRef.current) {
+      if (confirm('Save annotation changes to annotations.json before stopping?')) {
+        try {
+          await saveAnnotations();
+        } catch (e) {
+          if (!confirm(`Saving failed (${e}). Stop anyway and lose the changes?`)) return;
+        }
+      }
+    }
     await fetch(`${API}${mode === 'record' ? '/recordings/stop' : '/playback/stop'}`, { method:'POST' }).catch(() => {});
     onStop();
   }
