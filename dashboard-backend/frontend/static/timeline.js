@@ -361,8 +361,12 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
   const [currentTime, setCurrent] = useState(null);
   const [pendingSel, setPendingSel] = useState(null);   // {f1,f2} global fracs
   const [showPopup, setShowPopup]   = useState(false);
+  const [playing, setPlaying]       = useState(false);
   const rafRef = useRef();
+  const curRef = useRef(null);
   const duration = Math.max(1, (tEnd||0) - (tStart||0));
+
+  useEffect(() => { curRef.current = currentTime; }, [currentTime]);
 
   // Live clock
   useEffect(() => {
@@ -381,6 +385,35 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
       setCurrent(tStart); onTimeChange(tStart);
     }
   }, [mode, tStart]);
+
+  // Playback clock — advances the playhead in real time until paused or end of bag
+  useEffect(() => {
+    if (mode !== 'playback' || !playing) return;
+    let last = performance.now();
+    function tick(now) {
+      const dt = (now - last) / 1000;
+      last = now;
+      const next = Math.min((curRef.current ?? tStart ?? 0) + dt, tEnd || 0);
+      curRef.current = next;
+      setCurrent(next); onTimeChange(next);
+      if (tEnd && next >= tEnd) { setPlaying(false); return; }
+      rafRef.current = requestAnimationFrame(tick);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [mode, playing, tStart, tEnd]);
+
+  function togglePlay() {
+    if (!tEnd) return;   // no session range loaded yet
+    if (!playing) {
+      // Restart from the beginning if the playhead sits at the end
+      if (tEnd && curRef.current != null && curRef.current >= tEnd - 0.05) {
+        curRef.current = tStart || 0;
+        setCurrent(tStart || 0); onTimeChange(tStart || 0);
+      }
+    }
+    setPlaying(p => !p);
+  }
 
   // Expose pending selection so sidebar + button can trigger popup
   window._hariaPendingSelection = pendingSel;
@@ -423,6 +456,11 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         <div style={{ display:'flex', alignItems:'center', fontFamily:'var(--mono)', fontSize:9, color:'var(--g3)', padding:'0 14px', letterSpacing:'0.1em', borderLeft:'1px solid var(--black)' }}>
           scroll=pan · ctrl+scroll=zoom · alt+drag=pan
         </div>
+        {mode === 'playback' && (
+          <button className="tb-stop" style={{ borderLeft:'1px solid var(--black)', padding:'0 18px' }} onClick={togglePlay}>
+            {playing ? '❚❚ Pause' : '▶ Play'}
+          </button>
+        )}
         <button className="tb-stop" style={{ borderLeft:'1px solid var(--black)', padding:'0 18px' }} onClick={onStop}>■ Stop</button>
       </div>
 

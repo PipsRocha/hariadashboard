@@ -91,10 +91,12 @@ scrub the session while it records. `POST /recordings/stop` SIGINTs the
 recorder so rosbag2 flushes `metadata.yaml`, and ensures `annotations.json`
 exists next to the bag.
 
-**Playback** — upload a bag (`.mcap`/`.db3` directly, or zipped/tarred bag
-folder) via `POST /playback/upload`. It's stored under `recordings/` and
+**Playback** — open an existing recording from the list
+(`POST /playback/open {name}`) or upload a bag (`.mcap`/`.db3` directly, or a
+zipped/tarred bag folder) via `POST /playback/upload`. Either way it's
 indexed in the background into `session_out/` (progress via
-`GET /playback/status`).
+`GET /playback/status`), then scrubbed/played from the timeline
+(play/pause + drag).
 
 **Annotations** — the frontend loads/saves the current session's annotations
 via `GET`/`POST /session/annotations`; they're written to
