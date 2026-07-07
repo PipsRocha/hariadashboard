@@ -52,9 +52,11 @@ def is_numeric_type(msg_type: str) -> bool:
 
 def wipe_dir(path: Path) -> None:
     """Empty a session output directory so archives never mix."""
+    from app.services.session_cache import session_cache
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True, exist_ok=True)
+    session_cache.invalidate()
 
 
 def find_bag_root(base: Path) -> Path:
@@ -126,6 +128,9 @@ def _write_topic_entry(out_dir: Path, topic_name: str, msg_type: str, t: float,
             entry["position"] = raw.get("position", [])
             entry["velocity"] = raw.get("velocity", [])
             entry["effort"]   = raw.get("effort", [])
+        elif is_numeric_type(msg_type):
+            # Top-level numeric fields so chart panels can plot without _raw
+            entry.update(_numeric_summary(raw))
         (tdir / "latest.json").write_text(
             json.dumps({"t": t, "topic": topic_name, "msg_type": msg_type, **entry}),
             encoding="utf-8",
@@ -287,6 +292,30 @@ def _preprocess_sqlite(bag_path: Path, out_dir: Path) -> None:
         conn.close()
 
     _write_index(out_dir, topic_info, t_start or 0, t_end or 0)
+
+
+def _numeric_summary(raw: Any, prefix: str = "", out: Optional[dict] = None,
+                     depth: int = 0) -> dict:
+    """Flatten numeric fields of a decoded message into dotted top-level keys
+    (e.g. wrench.force.x). Header timestamps are skipped — they'd pollute
+    every chart with epoch-sized values."""
+    if out is None:
+        out = {}
+    if depth > 4 or len(out) >= 24:
+        return out
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k.startswith("_") or k == "header":
+                continue
+            _numeric_summary(v, f"{prefix}{k}." if isinstance(v, dict) else f"{prefix}{k}",
+                             out, depth + 1)
+    elif isinstance(raw, bool):
+        out[prefix.rstrip(".") or "value"] = float(raw)
+    elif isinstance(raw, (int, float)):
+        out[prefix.rstrip(".") or "value"] = raw
+    elif isinstance(raw, list) and raw and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in raw[:8]):
+        out[prefix.rstrip(".") or "value"] = raw[:64]
+    return out
 
 
 # ---------------------------------------------------------------------------

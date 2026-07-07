@@ -362,18 +362,31 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
   const [pendingSel, setPendingSel] = useState(null);   // {f1,f2} global fracs
   const [showPopup, setShowPopup]   = useState(false);
   const [playing, setPlaying]       = useState(false);
+  const [stopping, setStopping]     = useState(false);
   const rafRef = useRef();
   const curRef = useRef(null);
+  const lastEmit = useRef(0);
   const duration = Math.max(1, (tEnd||0) - (tStart||0));
 
   useEffect(() => { curRef.current = currentTime; }, [currentTime]);
+
+  // The playhead animates at 60fps locally, but propagating every frame to
+  // the Dashboard re-renders the whole app (sidebar, all panels) at 60Hz.
+  // Emit upstream at ~10Hz; seeks and pauses emit immediately (force).
+  function emitTime(t, force) {
+    const now = performance.now();
+    if (force || now - lastEmit.current >= 100) {
+      lastEmit.current = now;
+      onTimeChange(t);
+    }
+  }
 
   // Live clock
   useEffect(() => {
     if (mode !== 'record') return;
     function tick() {
       const now = Date.now() / 1000;
-      setCurrent(now); onTimeChange(now);
+      setCurrent(now); emitTime(now);
       rafRef.current = requestAnimationFrame(tick);
     }
     rafRef.current = requestAnimationFrame(tick);
@@ -395,8 +408,9 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
       last = now;
       const next = Math.min((curRef.current ?? tStart ?? 0) + dt, tEnd || 0);
       curRef.current = next;
-      setCurrent(next); onTimeChange(next);
-      if (tEnd && next >= tEnd) { setPlaying(false); return; }
+      const atEnd = tEnd && next >= tEnd;
+      setCurrent(next); emitTime(next, atEnd);
+      if (atEnd) { setPlaying(false); return; }
       rafRef.current = requestAnimationFrame(tick);
     }
     rafRef.current = requestAnimationFrame(tick);
@@ -409,8 +423,11 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
       // Restart from the beginning if the playhead sits at the end
       if (tEnd && curRef.current != null && curRef.current >= tEnd - 0.05) {
         curRef.current = tStart || 0;
-        setCurrent(tStart || 0); onTimeChange(tStart || 0);
+        setCurrent(tStart || 0); emitTime(tStart || 0, true);
       }
+    } else if (curRef.current != null) {
+      // Pausing: land the panels exactly on the final playhead position
+      emitTime(curRef.current, true);
     }
     setPlaying(p => !p);
   }
@@ -461,7 +478,15 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
             {playing ? '❚❚ Pause' : '▶ Play'}
           </button>
         )}
-        <button className="tb-stop" style={{ borderLeft:'1px solid var(--black)', padding:'0 18px' }} onClick={onStop}>■ Stop</button>
+        <button className="tb-stop" style={{ borderLeft:'1px solid var(--black)', padding:'0 18px', opacity: stopping ? 0.5 : 1 }}
+          disabled={stopping}
+          onClick={async () => {
+            setPlaying(false);
+            setStopping(true);
+            try { await onStop(); } finally { setStopping(false); }
+          }}>
+          {stopping ? '… Stopping' : '■ Stop'}
+        </button>
       </div>
 
       {/* Scrubber — independent viewport */}
@@ -469,7 +494,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         tStart={tStart} tEnd={tEnd}
         currentTime={currentTime}
         annotations={annotations}
-        onSeek={t => { setCurrent(t); onTimeChange(t); }}
+        onSeek={t => { setCurrent(t); emitTime(t); }}
       />
 
       {/* Annotation strip — independent viewport */}

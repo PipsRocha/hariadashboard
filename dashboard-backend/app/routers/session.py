@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.config import RECORDINGS_DIR, SESSION_OUT_DIR
 from app.services import bag_indexer, live_capture
+from app.services.session_cache import session_cache
 from app.services.session_state import session
 
 router = APIRouter(tags=["session"])
@@ -137,30 +138,24 @@ def topics_index():
 
 
 @router.get("/topics/data/{slug}")
-def topic_data(slug: str, t: Optional[float] = None, window: float = 10.0):
+def topic_data(slug: str, t: Optional[float] = None, window: float = 10.0,
+               raw: int = 1, limit: Optional[int] = None):
     """
-    With t: entries from data.jsonl within [t - window, t + window/10].
+    With t: entries from data.jsonl within [t - window, t + window/10],
+    served from the incremental in-memory cache (binary search, no file
+    re-parse). raw=0 strips the heavy _raw payload (chart panels only need
+    the numeric fields); limit=N returns only the last N entries of the
+    window (JSON/table panels only need the newest one).
     Without t: the latest.json snapshot.
     """
     tdir = _topic_dir(slug)
 
     if t is not None:
-        jsonl = tdir / "data.jsonl"
-        if not jsonl.exists():
-            raise HTTPException(404, "No JSONL data")
-        lo, hi = t - window, t + window / 10
-        entries = []
-        with jsonl.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if lo <= e.get("t", 0) <= hi:
-                    entries.append(e)
+        entries = session_cache.window(tdir / "data.jsonl", slug, t - window, t + window / 10)
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
+        if not raw:
+            entries = [{k: v for k, v in e.items() if k != "_raw"} for e in entries]
         return JSONResponse({"slug": slug, "t": t, "window": window, "entries": entries})
 
     latest = tdir / "latest.json"
@@ -174,9 +169,8 @@ def topic_image(slug: str, t: Optional[float] = None):
     tdir = _topic_dir(slug)
 
     if t is not None:
-        frames = [f for f in tdir.glob("*.jpg") if f.stem != "latest"]
-        if frames:
-            best = min(frames, key=lambda f: abs(float(f.stem) - t))
+        best = session_cache.nearest_frame(tdir, slug, t)
+        if best is not None:
             return FileResponse(str(best), media_type="image/jpeg")
 
     latest = tdir / "latest.jpg"

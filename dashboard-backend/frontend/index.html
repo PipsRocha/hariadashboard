@@ -288,7 +288,12 @@ function Dashboard({ mode, onStop }) {
 
   useEffect(() => {
     const t = setInterval(() => {
-      if (window._hariaOpenTopics) setOpenTopics(new Set(window._hariaOpenTopics));
+      const next = window._hariaOpenTopics;
+      if (!next) return;
+      // Only trigger a re-render when the set actually changed
+      setOpenTopics(prev =>
+        prev.size === next.size && [...next].every(x => prev.has(x)) ? prev : new Set(next)
+      );
     }, 500);
     return () => clearInterval(t);
   }, []);
