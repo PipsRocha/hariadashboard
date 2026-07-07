@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
-from mcap_ros2.reader import read_bag          # mcap-ros2-support
 from mcap.reader import make_reader            # mcap
+from mcap_ros2.decoder import DecoderFactory   # mcap-ros2-support
 
 log = logging.getLogger(__name__)
 
@@ -128,42 +128,48 @@ async def stream_messages(
     last_msg_ns:   Optional[int] = None
     last_wall_ns:  Optional[int] = None
 
-    # read_bag yields (schema, channel, message) in timestamp order
-    for schema, channel, message in read_bag(str(mcap_file), topics=topics):
-        if stop_event and stop_event.is_set():
-            return
+    with open(mcap_file, "rb") as f:
+        reader = make_reader(f, decoder_factories=[DecoderFactory()])
+        # iter_decoded_messages yields (schema, channel, message, decoded_msg)
+        # in log-time order. topics=None means "all topics" ([] would match
+        # nothing); start_time seeks efficiently within the file.
+        for schema, channel, message, ros_msg in reader.iter_decoded_messages(
+            topics=topics or None, start_time=start_ns, log_time_order=True
+        ):
+            if stop_event and stop_event.is_set():
+                return
 
-        ts_ns = message.publish_time  # nanoseconds
+            ts_ns = message.publish_time  # nanoseconds
 
-        # Skip messages before the requested start position (seek support)
-        if ts_ns < start_ns:
-            continue
+            # Guard against messages before the requested start (seek support)
+            if ts_ns < start_ns:
+                continue
 
-        # --- Timing: sleep to reproduce real-time gaps at requested speed ---
-        if last_msg_ns is not None and last_wall_ns is not None:
-            gap_ns    = ts_ns - last_msg_ns          # gap in bag time
-            elapsed   = asyncio.get_event_loop().time() * 1e9 - last_wall_ns
-            sleep_ns  = (gap_ns / speed) - elapsed
-            if sleep_ns > 0:
-                await asyncio.sleep(sleep_ns / 1e9)
+            # --- Timing: sleep to reproduce real-time gaps at requested speed ---
+            if last_msg_ns is not None and last_wall_ns is not None:
+                gap_ns    = ts_ns - last_msg_ns          # gap in bag time
+                elapsed   = asyncio.get_event_loop().time() * 1e9 - last_wall_ns
+                sleep_ns  = (gap_ns / speed) - elapsed
+                if sleep_ns > 0:
+                    await asyncio.sleep(sleep_ns / 1e9)
 
-        last_msg_ns  = ts_ns
-        last_wall_ns = int(asyncio.get_event_loop().time() * 1e9)
+            last_msg_ns  = ts_ns
+            last_wall_ns = int(asyncio.get_event_loop().time() * 1e9)
 
-        # --- Serialise ---
-        msg_type = schema.name
-        try:
-            payload = _serialise(message.ros_msg, msg_type)
-        except Exception as exc:
-            log.warning("Failed to serialise %s on %s: %s", msg_type, channel.topic, exc)
-            continue
+            # --- Serialise ---
+            msg_type = schema.name
+            try:
+                payload = _serialise(ros_msg, msg_type)
+            except Exception as exc:
+                log.warning("Failed to serialise %s on %s: %s", msg_type, channel.topic, exc)
+                continue
 
-        yield {
-            "topic":        channel.topic,
-            "timestamp_ns": ts_ns,
-            "msg_type":     msg_type,
-            **payload,
-        }
+            yield {
+                "topic":        channel.topic,
+                "timestamp_ns": ts_ns,
+                "msg_type":     msg_type,
+                **payload,
+            }
 
     # Natural end of bag
     yield {"topic": "__status__", "timestamp_ns": 0, "msg_type": "__status__", "data": "end"}
