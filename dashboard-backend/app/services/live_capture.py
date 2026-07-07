@@ -119,6 +119,7 @@ def _encode_jpeg(msg: Any, msg_type: str) -> Optional[bytes]:
 
 class _TopicHandler:
     def __init__(self, topic: str, msg_type: str, out_dir: Path) -> None:
+        self.closed   = False
         self.topic    = topic
         self.msg_type = msg_type
         self.slug     = slug(topic)
@@ -136,6 +137,10 @@ class _TopicHandler:
         self.count:      int   = 0
 
     def handle(self, msg: Any) -> None:
+        # A subscription can outlive stop() if node teardown partially fails;
+        # never write to the session archive after close().
+        if self.closed:
+            return
         now = time.time()
         if self.t_start == 0.0:
             self.t_start = now
@@ -164,6 +169,7 @@ class _TopicHandler:
         self._jsonl.flush()
 
     def close(self) -> None:
+        self.closed = True
         try:
             self._jsonl.close()
         except Exception:
@@ -232,8 +238,22 @@ class LiveCaptureNode(Node):
         }))
 
     def close(self) -> None:
+        # Tear down piecewise with per-step guards: destroy_node() can throw
+        # (e.g. InvalidHandle racing the spinning executor), and a single
+        # failure must not leave subscriptions or timers firing.
         for h in self.handlers.values():
             h.close()
+        for sub in list(self._subs.values()):
+            try:
+                self.destroy_subscription(sub)
+            except Exception:
+                pass
+        self._subs.clear()
+        for timer in list(self.timers):
+            try:
+                self.destroy_timer(timer)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +280,8 @@ def stop() -> None:
         if _node is None:
             return
         node, _node = _node, None
+        node.close()          # silence handlers + destroy subs/timers first
         ros_manager.remove_node(node)
-        node.close()
         try:
             node.destroy_node()
         except Exception:
