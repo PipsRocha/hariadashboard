@@ -91,6 +91,37 @@ def list_recordings():
     return list_bags()
 
 
+@router.get("/annotations")
+def all_annotations():
+    """Flat list of every annotation across all recordings, for the
+    annotations explorer (filter/count by name across sessions)."""
+    out = []
+    for entry in sorted(RECORDINGS_DIR.iterdir()):
+        ann_file = entry / "annotations.json"
+        if not entry.is_dir() or not ann_file.exists():
+            continue
+        try:
+            anns = json.loads(ann_file.read_text())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(anns, list):
+            continue
+        from app.services.recorder import _read_bag_times
+        times = _read_bag_times(entry)
+        for a in anns:
+            if not isinstance(a, dict):
+                continue
+            out.append({
+                "recording": entry.name,
+                "recording_start_ns": times.get("start_time_ns"),
+                "id":   a.get("id"),
+                "name": a.get("name") or a.get("label") or a.get("category") or "unnamed",
+                "t1":   a.get("t1"),
+                "t2":   a.get("t2"),
+            })
+    return out
+
+
 @router.get("/{name}/info")
 def recording_info(name: str):
     bag_path = RECORDINGS_DIR / name

@@ -277,11 +277,20 @@ def list_bags() -> list[dict]:
             continue
         metadata = entry / "metadata.yaml"
         mcap_files = list(entry.glob("*.mcap"))
+        ann_file = entry / "annotations.json"
+        ann_count = 0
+        if ann_file.exists():
+            try:
+                anns = json.loads(ann_file.read_text())
+                ann_count = len(anns) if isinstance(anns, list) else 0
+            except json.JSONDecodeError:
+                pass
         bags.append({
             "name": entry.name,
             "has_metadata": metadata.exists(),
             "mcap_files": [f.name for f in mcap_files],
             "size_bytes": sum(f.stat().st_size for f in entry.rglob("*") if f.is_file()),
+            "annotation_count": ann_count,
             **_read_bag_times(entry),   # adds start/end/duration
         })
     return bags

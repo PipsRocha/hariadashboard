@@ -395,9 +395,14 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
 
   useEffect(() => {
     if (mode === 'playback' && tStart && currentTime === null) {
-      setCurrent(tStart); onTimeChange(tStart);
+      // Honour a pending seek target (e.g. "Open" from the annotations explorer)
+      let t0 = tStart;
+      const seek = window._hariaSeekTo;
+      if (seek != null && isFinite(seek) && tEnd && seek >= tStart && seek <= tEnd) t0 = seek;
+      window._hariaSeekTo = null;
+      setCurrent(t0); onTimeChange(t0);
     }
-  }, [mode, tStart]);
+  }, [mode, tStart, tEnd]);
 
   // Playback clock — advances the playhead in real time until paused or end of bag
   useEffect(() => {
