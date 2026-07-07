@@ -18,10 +18,26 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import RECORDINGS_DIR, SESSION_OUT_DIR
-from app.services import bag_indexer
+from app.services import bag_indexer, live_capture
 from app.services.session_state import session
 
 router = APIRouter(tags=["session"])
+
+
+def _ensure_no_live_writers() -> None:
+    """A playback session must have exclusive ownership of SESSION_OUT_DIR.
+
+    If a recording is still running, refuse; if a live-capture node was left
+    behind (browser refreshed instead of pressing Stop), shut it down so it
+    can't keep rewriting the archive we're about to build."""
+    from app.services.recorder import recorder
+    if recorder.state.is_active:
+        raise HTTPException(
+            409,
+            "A recording is still in progress — stop it before opening a "
+            "bag for playback.",
+        )
+    live_capture.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +50,7 @@ class OpenRequest(BaseModel):
 
 @router.post("/playback/open")
 async def playback_open(req: OpenRequest, background_tasks: BackgroundTasks):
+    _ensure_no_live_writers()
     bag_dir = (RECORDINGS_DIR / req.name).resolve()
     if RECORDINGS_DIR.resolve() not in bag_dir.parents or not bag_dir.is_dir():
         raise HTTPException(404, f"Recording {req.name!r} not found")
@@ -50,6 +67,7 @@ async def playback_open(req: OpenRequest, background_tasks: BackgroundTasks):
 
 @router.post("/playback/upload")
 async def playback_upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    _ensure_no_live_writers()
     stem = Path(file.filename).name
     for ext in (".zip", ".tar.gz", ".tgz", ".mcap", ".db3"):
         if stem.endswith(ext):
@@ -85,7 +103,12 @@ async def playback_upload(background_tasks: BackgroundTasks, file: UploadFile = 
 
 @router.get("/playback/status")
 def playback_status():
-    return session.status
+    from app.services.recorder import recorder
+    return {
+        **session.status,
+        "recording_active": recorder.state.is_active,
+        "live_capture_active": live_capture.is_active(),
+    }
 
 
 @router.post("/playback/stop")
