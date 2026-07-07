@@ -17,36 +17,106 @@
 <script src="/static/sidebar.js"  type="text/babel" data-presets="react"></script>
 <script src="/static/panels.js"   type="text/babel" data-presets="react"></script>
 <script src="/static/timeline.js" type="text/babel" data-presets="react"></script>
+<script src="/static/explorer.js" type="text/babel" data-presets="react"></script>
 
 <script type="text/babel" data-presets="react">
 (function () {
 const { useState, useEffect, useRef } = React;
 const API = window.HARIA_API;
 
-// ── Mode Select ───────────────────────────────────────────────────────
-function ModeSelect({ onMode }) {
+// ── Home ──────────────────────────────────────────────────────────────
+function Home({ onRecord, onPlayback, onAnnotations, onOpenRecording }) {
+  const [recordings, setRecordings] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/recordings`)
+      .then(r => r.ok ? r.json() : [])
+      .then(arr => {
+        if (!Array.isArray(arr)) return;
+        const usable = arr.filter(r => r.has_metadata || (r.mcap_files || []).length > 0);
+        usable.sort((a, b) => (b.start_time_ns || 0) - (a.start_time_ns || 0));
+        setRecordings(usable);
+      })
+      .catch(() => {})
+      .finally(() => setLoaded(true));
+  }, []);
+
+  function fmtDate(ns) {
+    if (!ns) return '—';
+    const d = new Date(ns / 1e6);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+
   return (
     <div className="mode-screen fade-in">
       <div className="mode-top">
         <div className="brand">HARIA</div>
         <div className="brand-sub">Failure Dashboard · ROS 2 Jazzy</div>
       </div>
-      <div className="mode-cards">
-        <div className="mode-card" onClick={() => onMode('record')}>
-          <div className="card-num">01 / RECORD</div>
-          <div className="card-line" />
-          <div className="card-title">Record</div>
-          <div className="card-desc">Capture live ROS 2 topics. All data buffered to disk in real time — scrub back to any moment.</div>
+      <div style={{ display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div className="mode-cards" style={{ gridTemplateColumns:'1fr 1fr 1fr', borderBottom:'2px solid var(--black)', flexShrink:0 }}>
+          <div className="mode-card" style={{ padding:'34px 40px' }} onClick={onRecord}>
+            <div className="card-num">01 / RECORD</div>
+            <div className="card-line" />
+            <div className="card-title">Record</div>
+            <div className="card-desc">Capture live ROS 2 topics to a new .mcap recording, with live scrubbing and annotation.</div>
+          </div>
+          <div className="mode-card" style={{ padding:'34px 40px' }} onClick={onPlayback}>
+            <div className="card-num">02 / PLAYBACK</div>
+            <div className="card-line" />
+            <div className="card-title">Playback</div>
+            <div className="card-desc">Upload an external bag, or open a local recording from the list below.</div>
+          </div>
+          <div className="mode-card" style={{ padding:'34px 40px' }} onClick={onAnnotations}>
+            <div className="card-num">03 / ANNOTATIONS</div>
+            <div className="card-line" />
+            <div className="card-title">Annotations</div>
+            <div className="card-desc">Search every annotations.json across recordings — group by name, count occurrences, jump to the moment.</div>
+          </div>
         </div>
-        <div className="mode-card" onClick={() => onMode('playback')}>
-          <div className="card-num">02 / PLAYBACK</div>
-          <div className="card-line" />
-          <div className="card-title">Playback</div>
-          <div className="card-desc">Upload a bag file. Pre-processed into a time-indexed archive. Freely scrub to any timestamp.</div>
+
+        {/* Local recordings */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <div style={{ padding:'12px 48px', borderBottom:'1px solid var(--black)', fontFamily:'var(--mono)',
+                        fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase', color:'var(--g3)',
+                        display:'flex', justifyContent:'space-between' }}>
+            <span>Local recordings</span>
+            <span>{recordings.length}</span>
+          </div>
+          <div style={{ flex:1, overflowY:'auto' }}>
+            {loaded && recordings.length === 0 && (
+              <div style={{ padding:'24px 48px', fontFamily:'var(--mono)', fontSize:11, color:'var(--g3)' }}>
+                No recordings yet — start with 01 / Record.
+              </div>
+            )}
+            {recordings.map(rec => (
+              <div key={rec.name}
+                onClick={() => onOpenRecording(rec.name)}
+                title="Open in playback"
+                style={{ display:'flex', alignItems:'baseline', gap:18, padding:'10px 48px', cursor:'pointer',
+                         borderBottom:'1px solid var(--g5)', fontFamily:'var(--mono)', fontSize:12 }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--g6)'}
+                onMouseLeave={e => e.currentTarget.style.background = ''}
+              >
+                <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{rec.name}</span>
+                <span style={{ color:'var(--g3)', fontSize:10 }}>{fmtDate(rec.start_time_ns)}</span>
+                <span style={{ color:'var(--g3)', fontSize:10, width:70, textAlign:'right' }}>
+                  {rec.duration_ns ? `${(rec.duration_ns / 1e9).toFixed(1)}s` : '—'}
+                </span>
+                <span style={{ color:'var(--g3)', fontSize:10, width:78, textAlign:'right' }}>
+                  {(rec.size_bytes / 1e6).toFixed(1)} MB
+                </span>
+                <span style={{ color:'var(--g3)', fontSize:10, width:56, textAlign:'right' }}>
+                  {rec.annotation_count != null ? `${rec.annotation_count} ann` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
       <div className="mode-bottom">
-        <div className="ver">HARIA Failure Dashboard · v2.0</div>
+        <div className="ver">HARIA Failure Dashboard · v2.1</div>
         <div className="ver">ROS 2 Jazzy · Universal Topic Viewer</div>
       </div>
     </div>
@@ -101,7 +171,7 @@ function RecordSetup({ onStart, onBack }) {
 }
 
 // ── Playback Upload ───────────────────────────────────────────────────
-function PlaybackUpload({ onStart, onBack }) {
+function PlaybackUpload({ onStart, onBack, autoOpen }) {
   const [uploadStatus, setUploadStatus] = useState('Drop a bag file to upload');
   const [statusType, setStatusType]     = useState('');
   const [procState, setProcState]       = useState('idle');
@@ -162,6 +232,9 @@ function PlaybackUpload({ onStart, onBack }) {
   }
 
   useEffect(() => () => clearInterval(pollRef.current), []);
+
+  // Arriving from the home list or the annotations explorer: open immediately
+  useEffect(() => { if (autoOpen) openRecording(autoOpen); }, []);
 
   const pct = (() => { const m = procMsg.match(/(\d+)%/); return m ? m[1] + '%' : '8%'; })();
 
@@ -380,14 +453,35 @@ function Dashboard({ mode, onStop }) {
 
 // ── App ───────────────────────────────────────────────────────────────
 function App() {
-  const [screen, setScreen] = useState('mode');
-  const [mode, setMode]     = useState(null);
+  const [screen, setScreen]     = useState('home');
+  const [mode, setMode]         = useState(null);
+  const [autoOpen, setAutoOpen] = useState(null);
+
+  function openRecording(name, seekT) {
+    // A pending seek target is honoured by the timeline once the session loads
+    window._hariaSeekTo = (seekT != null && isFinite(seekT)) ? seekT : null;
+    setAutoOpen(name);
+    setMode('playback');
+    setScreen('playback-upload');
+  }
+  function goHome() { setMode(null); setAutoOpen(null); setScreen('home'); }
+
   return (
     <>
-      {screen === 'mode'            && <ModeSelect onMode={m => { setMode(m); setScreen(m === 'record' ? 'record-setup' : 'playback-upload'); }} />}
-      {screen === 'record-setup'    && <RecordSetup    onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={() => setScreen('mode')} />}
-      {screen === 'playback-upload' && <PlaybackUpload onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={() => setScreen('mode')} />}
-      {screen === 'dashboard'       && <Dashboard mode={mode} onStop={() => { setMode(null); setScreen('mode'); }} />}
+      {screen === 'home' && (
+        <Home
+          onRecord={() => { setMode('record'); setScreen('record-setup'); }}
+          onPlayback={() => { setMode('playback'); setAutoOpen(null); setScreen('playback-upload'); }}
+          onAnnotations={() => setScreen('annotations')}
+          onOpenRecording={openRecording}
+        />
+      )}
+      {screen === 'annotations' && (
+        <window.HariaAnnotationsExplorer onBack={goHome} onOpenRecording={openRecording} />
+      )}
+      {screen === 'record-setup'    && <RecordSetup    onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={goHome} />}
+      {screen === 'playback-upload' && <PlaybackUpload onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={goHome} autoOpen={autoOpen} />}
+      {screen === 'dashboard'       && <Dashboard mode={mode} onStop={goHome} />}
     </>
   );
 }

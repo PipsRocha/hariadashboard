@@ -103,3 +103,9 @@ via `GET`/`POST /session/annotations`; they're written to
 `annotations.json` inside the bag folder, next to the `.mcap` and
 `metadata.yaml`, so they travel with the recording. Per-recording access is
 also available at `GET`/`POST /recordings/{name}/annotations`.
+
+**Annotations explorer** — the home screen's third card opens an explorer
+over every `annotations.json` across recordings (`GET
+/recordings/annotations`): group by name, occurrence counts across files,
+filter by name / recording / minimum count, export the filtered set, and
+jump straight into playback at an annotation's start time.
