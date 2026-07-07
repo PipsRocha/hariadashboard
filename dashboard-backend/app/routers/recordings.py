@@ -5,8 +5,11 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services.recorder import recorder, list_bags, RECORDINGS_DIR
+from app.config import RECORDINGS_DIR, SESSION_OUT_DIR
+from app.services.recorder import recorder, list_bags
 from app.services.bag_reader import get_bag_info
+from app.services.session_state import session
+from app.services import live_capture
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -16,7 +19,9 @@ router = APIRouter(prefix="/recordings", tags=["recordings"])
 # ---------------------------------------------------------------------------
 
 class StartRequest(BaseModel):
-    topics: list[str] = Field(..., min_length=1, examples=[["/chatter", "/tf"]])
+    topics: list[str] = Field(default_factory=list,
+                              description="Topics to record; empty = record all",
+                              examples=[["/chatter", "/tf"]])
     name: Optional[str] = Field(None, description="Optional bag folder name")
 
 
@@ -50,6 +55,10 @@ async def start(req: StartRequest):
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Mirror the live graph into the session archive so the dashboard can
+    # visualise the session while it's being recorded.
+    session.set_bag(s.bag_path)
+    live_capture.start(SESSION_OUT_DIR)
     return StatusResponse(
         active=s.is_active,
         bag_path=str(s.bag_path) if s.bag_path else None,
@@ -60,6 +69,7 @@ async def start(req: StartRequest):
 
 @router.post("/stop", response_model=StatusResponse)
 async def stop():
+    live_capture.stop()
     try:
         s = await recorder.stop()
     except RuntimeError as e:

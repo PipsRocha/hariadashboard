@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HARIA Failure Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Bebas+Neue&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script>window.HARIA_API = '';  /* same origin — the backend serves this page */</script>
+<script src="/static/sidebar.js"  type="text/babel" data-presets="react"></script>
+<script src="/static/panels.js"   type="text/babel" data-presets="react"></script>
+<script src="/static/timeline.js" type="text/babel" data-presets="react"></script>
+
+<script type="text/babel" data-presets="react">
+(function () {
+const { useState, useEffect, useRef } = React;
+const API = window.HARIA_API;
+
+// ── Mode Select ───────────────────────────────────────────────────────
+function ModeSelect({ onMode }) {
+  return (
+    <div className="mode-screen fade-in">
+      <div className="mode-top">
+        <div className="brand">HARIA</div>
+        <div className="brand-sub">Failure Dashboard · ROS 2 Jazzy</div>
+      </div>
+      <div className="mode-cards">
+        <div className="mode-card" onClick={() => onMode('record')}>
+          <div className="card-num">01 / RECORD</div>
+          <div className="card-line" />
+          <div className="card-title">Record</div>
+          <div className="card-desc">Capture live ROS 2 topics. All data buffered to disk in real time — scrub back to any moment.</div>
+        </div>
+        <div className="mode-card" onClick={() => onMode('playback')}>
+          <div className="card-num">02 / PLAYBACK</div>
+          <div className="card-line" />
+          <div className="card-title">Playback</div>
+          <div className="card-desc">Upload a bag file. Pre-processed into a time-indexed archive. Freely scrub to any timestamp.</div>
+        </div>
+      </div>
+      <div className="mode-bottom">
+        <div className="ver">HARIA Failure Dashboard · v2.0</div>
+        <div className="ver">ROS 2 Jazzy · Universal Topic Viewer</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Record Setup ──────────────────────────────────────────────────────
+function RecordSetup({ onStart, onBack }) {
+  const [name, setName]       = useState('session');
+  const [topics, setTopics]   = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]         = useState('');
+  async function start() {
+    setLoading(true); setErr('');
+    try {
+      const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const body = { name: `${name || 'session'}_${ts}`, topics: [] };
+      if (topics.trim()) body.topics = topics.trim().split(/[\s\n]+/).filter(Boolean);
+      const r = await fetch(`${API}/recordings/start`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text());
+      onStart('record');
+    } catch(e) { setErr(String(e)); }
+    setLoading(false);
+  }
+  return (
+    <div className="setup-screen fade-in">
+      <div className="setup-header">
+        <button className="back-btn" onClick={onBack}>← Back</button>
+        <h1>Configure Recording</h1>
+      </div>
+      <div className="setup-body">
+        <div className="setup-form">
+          <div className="form-row">
+            <label>Session Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="session" />
+            <div className="hint">Saved to recordings/&lt;name&gt;_&lt;timestamp&gt; (.mcap + metadata.yaml + annotations.json)</div>
+          </div>
+          <div className="form-row">
+            <label>Topics — leave blank to record all</label>
+            <textarea value={topics} onChange={e => setTopics(e.target.value)} placeholder={"/joint_states\n/camera/image_raw"} />
+            <div className="hint">One per line. Blank = subscribe to everything.</div>
+          </div>
+          {err && <div className="err-row">{err}</div>}
+          <div className="form-actions">
+            <button className="btn" onClick={onBack}>Cancel</button>
+            <button className="btn primary" onClick={start} disabled={loading}>{loading ? 'Starting…' : '⏺  Start Recording'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Playback Upload ───────────────────────────────────────────────────
+function PlaybackUpload({ onStart, onBack }) {
+  const [uploadStatus, setUploadStatus] = useState('Drop a bag file to upload');
+  const [statusType, setStatusType]     = useState('');
+  const [procState, setProcState]       = useState('idle');
+  const [procMsg, setProcMsg]           = useState('');
+  const [dragging, setDragging]         = useState(false);
+  const fileRef = useRef();
+  const pollRef = useRef();
+
+  async function upload(file) {
+    setUploadStatus(`Uploading ${file.name}…`); setStatusType(''); setProcState('idle');
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await fetch(`${API}/playback/upload`, { method:'POST', body:fd });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      setUploadStatus(`Uploaded → ${d.path}`); setStatusType('ok');
+      setProcState('processing'); setProcMsg('Processing bag…');
+      clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const r2 = await fetch(`${API}/playback/status`);
+          const d2 = await r2.json();
+          setProcState(d2.state); setProcMsg(d2.progress || d2.error || '');
+          if (d2.state === 'ready' || d2.state === 'error') clearInterval(pollRef.current);
+        } catch {}
+      }, 800);
+    } catch(e) { setUploadStatus(String(e)); setStatusType('err'); }
+  }
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const pct = (() => { const m = procMsg.match(/(\d+)%/); return m ? m[1] + '%' : '8%'; })();
+
+  return (
+    <div className="upload-screen fade-in">
+      <div className="setup-header">
+        <button className="back-btn" onClick={onBack}>← Back</button>
+        <h1>Upload Bag</h1>
+      </div>
+      <div className="upload-body">
+        <div className="upload-inner">
+          <div className="upload-title">Select ROS 2 bag file</div>
+          <div className={`drop-zone${dragging ? ' drag-over' : ''}`}
+            onClick={() => fileRef.current.click()}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) upload(f); }}
+          >
+            <div className="dz-icon">UPLOAD</div>
+            <div className="dz-main">Drop here or click to browse</div>
+            <div className="dz-sub">.db3 · .mcap · .zip · .tar.gz</div>
+            <input ref={fileRef} type="file" style={{ display:'none' }} onChange={e => { if (e.target.files[0]) upload(e.target.files[0]); }} />
+          </div>
+          <div className={`status-bar ${statusType}`}>{uploadStatus}</div>
+          {procState === 'processing' && (
+            <div className="processing-bar">
+              <span>{procMsg}</span>
+              <div className="proc-progress"><div className="proc-fill" style={{ width: pct, animation: procMsg.includes('%') ? 'none' : undefined }} /></div>
+            </div>
+          )}
+          {procState === 'error'  && <div className="err-row">{procMsg}</div>}
+          {procState === 'ready'  && <div className="status-bar ok">✓ Ready to open</div>}
+          <div className="form-actions">
+            <button className="btn" onClick={onBack}>Cancel</button>
+            <button className="btn primary" onClick={() => onStart('playback')} disabled={procState !== 'ready'}>▶  Open Dashboard</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────
+function Dashboard({ mode, onStop }) {
+  const [topicIndex, setTopicIndex]     = useState([]);
+  const [tStart, setTStart]             = useState(null);
+  const [tEnd, setTEnd]                 = useState(null);
+  const [currentTime, setCurrentTime]   = useState(null);
+  const [openTopics, setOpenTopics]     = useState(new Set());
+  const [annotations, setAnnotations]   = useState([]);
+  const [annCollapsed, setAnnCollapsed] = useState(false);
+  const annLoaded = useRef(false);
+  const annSaveT  = useRef(null);
+
+  // Annotations persist as annotations.json next to the bag's .mcap/metadata.yaml.
+  useEffect(() => {
+    fetch(`${API}/session/annotations`)
+      .then(r => r.ok ? r.json() : [])
+      .then(arr => { if (Array.isArray(arr)) setAnnotations(arr); })
+      .catch(() => {})
+      .finally(() => { annLoaded.current = true; });
+  }, []);
+
+  useEffect(() => {
+    if (!annLoaded.current) return;
+    clearTimeout(annSaveT.current);
+    annSaveT.current = setTimeout(() => {
+      fetch(`${API}/session/annotations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(annotations),
+      }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(annSaveT.current);
+  }, [annotations]);
+
+  useEffect(() => {
+    async function poll() {
+      try {
+        const r = await fetch(`${API}/topics/index`);
+        if (!r.ok) return;
+        const d = await r.json();
+        setTopicIndex(d.topics || []);
+        if (d.t_start) setTStart(d.t_start);
+        if (d.t_end)   setTEnd(d.t_end);
+      } catch {}
+    }
+    poll();
+    const t = setInterval(poll, 1500);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (window._hariaOpenTopics) setOpenTopics(new Set(window._hariaOpenTopics));
+    }, 500);
+    return () => clearInterval(t);
+  }, []);
+
+  function handleAddPanel(meta, type) { if (window._hariaAddPanel) window._hariaAddPanel(meta, type); }
+  function handleAddAnnotation(ann)   { setAnnotations(a => [...a, ann]); setAnnCollapsed(false); }
+  function handleDeleteAnnotation(id) { setAnnotations(a => a.filter(a => a.id !== id)); }
+  function handleImport(arr) { setAnnotations(a => [...a, ...arr]); }
+  function handleExport() {
+    const blob = new Blob([JSON.stringify(annotations, null, 2)], { type:'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'haria_annotations.json'; a.click();
+    URL.revokeObjectURL(url);
+  }
+  async function handleStop() {
+    await fetch(`${API}${mode === 'record' ? '/recordings/stop' : '/playback/stop'}`, { method:'POST' }).catch(() => {});
+    onStop();
+  }
+
+  return (
+    <div className="dashboard fade-in">
+      <div className="topbar" style={{ gridColumn:'1 / -1' }}>
+        <div className="tb-cell"><div className="tb-brand">HARIA</div></div>
+        <div className="tb-cell">
+          <div className="tb-label">Mode</div>
+          <div className="tb-value"><span className="tb-dot" />{mode === 'record' ? 'Recording' : 'Playback'}</div>
+        </div>
+        <div className="tb-cell">
+          <div className="tb-label">Topics</div>
+          <div className="tb-value">{topicIndex.length} · {topicIndex.filter(t => t.active).length} active</div>
+        </div>
+        <div className="tb-cell">
+          <div className="tb-label">Panels</div>
+          <div className="tb-value">{openTopics.size}</div>
+        </div>
+        <div className="tb-spacer" />
+      </div>
+
+      <window.HariaSidebar
+        topicIndex={topicIndex}
+        openTopics={openTopics}
+        onAddPanel={handleAddPanel}
+      />
+
+      <window.HariaPanelArea
+        topicIndex={topicIndex}
+        currentTime={currentTime}
+      />
+
+      <window.HariaAnnotationsSidebar
+        annotations={annotations}
+        onDelete={handleDeleteAnnotation}
+        onImport={handleImport}
+        onExport={handleExport}
+        collapsed={annCollapsed}
+        onToggle={() => setAnnCollapsed(v => !v)}
+      />
+
+      <window.HariaTimelineContainer
+        mode={mode}
+        tStart={tStart}
+        tEnd={tEnd}
+        topicIndex={topicIndex}
+        onTimeChange={setCurrentTime}
+        onStop={handleStop}
+        annotations={annotations}
+        onAddAnnotation={handleAddAnnotation}
+        annCollapsed={annCollapsed}
+        onToggleAnn={() => setAnnCollapsed(v => !v)}
+      />
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────
+function App() {
+  const [screen, setScreen] = useState('mode');
+  const [mode, setMode]     = useState(null);
+  return (
+    <>
+      {screen === 'mode'            && <ModeSelect onMode={m => { setMode(m); setScreen(m === 'record' ? 'record-setup' : 'playback-upload'); }} />}
+      {screen === 'record-setup'    && <RecordSetup    onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={() => setScreen('mode')} />}
+      {screen === 'playback-upload' && <PlaybackUpload onStart={m => { setMode(m); setScreen('dashboard'); }} onBack={() => setScreen('mode')} />}
+      {screen === 'dashboard'       && <Dashboard mode={mode} onStop={() => { setMode(null); setScreen('mode'); }} />}
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+})();
+</script>
+</body>
+</html>

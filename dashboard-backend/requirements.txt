@@ -4,3 +4,12 @@ pydantic==2.*
 python-multipart==0.0.*
 websockets==13.*
 psutil
+pyyaml
+mcap
+mcap-ros2-support
+numpy
+Pillow
+
+# NOTE: rclpy, cv_bridge and OpenCV (cv2) come from the ROS 2 installation,
+# not pip. Create the venv with --system-site-packages and source
+# /opt/ros/jazzy/setup.bash before launching (see run.sh).

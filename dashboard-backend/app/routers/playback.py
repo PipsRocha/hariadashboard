@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 from app.services.player import player
 
 
-router = APIRouter(prefix="/playback", tags=["playback"])
+# Note: /playback/* (upload, status, stop) belongs to the session router —
+# this router controls replaying a bag onto the live ROS graph.
+router = APIRouter(prefix="/player", tags=["player"])
 
 
 class PlayRequest(BaseModel):
