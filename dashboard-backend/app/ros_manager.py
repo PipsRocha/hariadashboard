@@ -81,5 +81,12 @@ class RosManager:
             raise RuntimeError("RosManager not started")
         self._executor.add_node(node)
 
+    def remove_node(self, node: Node) -> None:
+        if self._executor is not None:
+            try:
+                self._executor.remove_node(node)
+            except Exception:
+                pass
+
 
 ros_manager = RosManager()

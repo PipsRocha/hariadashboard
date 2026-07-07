@@ -21,8 +21,8 @@ import json
 import psutil
 
 
-RECORDINGS_DIR = Path(__file__).resolve().parent.parent.parent / "recordings"
-RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+from app.config import RECORDINGS_DIR
+
 STATE_FILE = RECORDINGS_DIR / ".recorder_state.json"
 
 # Refuse to start a recording if the recordings volume has less than this free.
@@ -151,9 +151,6 @@ class Recorder:
             if self._state.is_active:
                 raise RuntimeError("A recording is already in progress.")
 
-            if not topics:
-                raise ValueError("At least one topic is required.")
-
             if shutil.which("ros2") is None:
                 raise RuntimeError(
                     "`ros2` not found on PATH. Did you source /opt/ros/jazzy/setup.bash "
@@ -174,11 +171,12 @@ class Recorder:
             if bag_path.exists():
                 raise RuntimeError(f"A recording named {bag_name!r} already exists.")
 
+            # Empty topic list = record everything (-a).
             cmd = [
                 "ros2", "bag", "record",
                 "-s", "mcap",
                 "-o", str(bag_path),
-                *topics,
+                *(topics if topics else ["-a"]),
             ]
 
             # Redirect stdout+stderr to a log file next to the bag.

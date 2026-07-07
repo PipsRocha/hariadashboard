@@ -1,3 +1,5 @@
-__pycache__/main.cpython-312.pyc
-dashboard/
+__pycache__/
+*.pyc
+.venv/
 venv/
+dashboard/
