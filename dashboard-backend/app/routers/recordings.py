@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 import json
+import re
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -91,6 +92,70 @@ def list_recordings():
     return list_bags()
 
 
+# ---------------------------------------------------------------------------
+# Annotation categories
+# ---------------------------------------------------------------------------
+
+# Built-in taxonomy; user-created categories are appended to a dotfile next
+# to the recordings so they travel with the data set.
+DEFAULT_CATEGORIES = [
+    {"id": "failure",      "label": "Failure",           "color": "#e8554e"},
+    {"id": "recovery",     "label": "Recovery",          "color": "#3fb27f"},
+    {"id": "intervention", "label": "User Intervention", "color": "#f5a623"},
+    {"id": "anomaly",      "label": "Anomaly",           "color": "#9b6dff"},
+    {"id": "note",         "label": "Note",              "color": "#5b8def"},
+]
+CATEGORIES_FILE = RECORDINGS_DIR / ".categories.json"
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+class CategoryRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=40)
+    color: str = Field(..., description="Hex color, e.g. #e8554e")
+
+
+def _load_custom_categories() -> list[dict]:
+    if not CATEGORIES_FILE.exists():
+        return []
+    try:
+        data = json.loads(CATEGORIES_FILE.read_text())
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def _all_categories() -> list[dict]:
+    seen = {c["id"] for c in DEFAULT_CATEGORIES}
+    merged = list(DEFAULT_CATEGORIES)
+    for c in _load_custom_categories():
+        if isinstance(c, dict) and c.get("id") and c["id"] not in seen:
+            merged.append(c)
+            seen.add(c["id"])
+    return merged
+
+
+@router.get("/annotations/categories")
+def get_categories():
+    return _all_categories()
+
+
+@router.post("/annotations/categories")
+def add_category(req: CategoryRequest):
+    if not _HEX_COLOR_RE.match(req.color):
+        raise HTTPException(400, "Color must be a hex value like #e8554e")
+    cat_id = re.sub(r"[^a-z0-9]+", "_", req.label.strip().lower()).strip("_")
+    if not cat_id:
+        raise HTTPException(400, "Label must contain letters or digits")
+    if any(c["id"] == cat_id for c in _all_categories()):
+        raise HTTPException(409, f"Category {cat_id!r} already exists")
+
+    custom = _load_custom_categories()
+    custom.append({"id": cat_id, "label": req.label.strip(), "color": req.color})
+    CATEGORIES_FILE.write_text(json.dumps(custom, indent=2))
+    return _all_categories()
+
+
 @router.get("/annotations")
 def all_annotations():
     """Flat list of every annotation across all recordings, for the
@@ -114,10 +179,11 @@ def all_annotations():
             out.append({
                 "recording": entry.name,
                 "recording_start_ns": times.get("start_time_ns"),
-                "id":   a.get("id"),
-                "name": a.get("name") or a.get("label") or a.get("category") or "unnamed",
-                "t1":   a.get("t1"),
-                "t2":   a.get("t2"),
+                "id":       a.get("id"),
+                "name":     a.get("name") or a.get("label") or a.get("category") or "unnamed",
+                "category": a.get("category"),
+                "t1":       a.get("t1"),
+                "t2":       a.get("t2"),
             })
     return out
 

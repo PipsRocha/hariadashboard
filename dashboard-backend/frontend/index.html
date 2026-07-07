@@ -24,6 +24,38 @@
 const { useState, useEffect, useRef } = React;
 const API = window.HARIA_API;
 
+// ── Annotation categories (shared) ────────────────────────────────────
+// Loaded once from the backend; timeline/panels/explorer read the window
+// globals so every surface colors annotations consistently.
+window.HARIA_ANN_CATEGORIES = [];
+window.HariaCatColor = function (categoryId) {
+  const c = (window.HARIA_ANN_CATEGORIES || []).find(c => c.id === categoryId);
+  return c ? c.color : null;
+};
+window.HariaCatLabel = function (categoryId) {
+  const c = (window.HARIA_ANN_CATEGORIES || []).find(c => c.id === categoryId);
+  return c ? c.label : (categoryId || '');
+};
+async function loadCategories() {
+  try {
+    const r = await fetch(`${API}/recordings/annotations/categories`);
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d)) window.HARIA_ANN_CATEGORIES = d;
+    }
+  } catch {}
+}
+window.HariaAddCategory = async function (label, color) {
+  const r = await fetch(`${API}/recordings/annotations/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, color }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+  const d = await r.json();
+  if (Array.isArray(d)) window.HARIA_ANN_CATEGORIES = d;
+  return window.HARIA_ANN_CATEGORIES;
+};
+
 // ── Home ──────────────────────────────────────────────────────────────
 function Home({ onRecord, onPlayback, onAnnotations, onOpenRecording }) {
   const [recordings, setRecordings] = useState([]);
@@ -500,6 +532,8 @@ function App() {
   const [screen, setScreen]     = useState('home');
   const [mode, setMode]         = useState(null);
   const [autoOpen, setAutoOpen] = useState(null);
+
+  useEffect(() => { loadCategories(); }, []);
 
   function openRecording(name, seekT) {
     // A pending seek target is honoured by the timeline once the session loads

@@ -345,8 +345,11 @@ function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collaps
   }, []);
 
   const allNames = [...new Set(annotations.map(a => a.name))];
-  function color(name) {
-    const idx = allNames.indexOf(name);
+  function color(ann) {
+    // Category color when present; greyscale-by-name for legacy annotations
+    const catColor = ann.category && window.HariaCatColor && window.HariaCatColor(ann.category);
+    if (catColor) return catColor;
+    const idx = allNames.indexOf(ann.name);
     return ANN_COLORS[Math.max(0, idx) % ANN_COLORS.length];
   }
 
@@ -430,13 +433,24 @@ function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collaps
               </div>
             ) : (
               annotations.map(ann => (
-                <div key={ann.id} className="ann-item">
-                  <div className="ann-item-swatch" style={{ background: color(ann.name) }} />
+                <div key={ann.id} className="ann-item" style={{ cursor:'pointer' }}
+                  title="Click to jump to this annotation"
+                  onClick={() => { if (window._hariaJumpTo) window._hariaJumpTo(ann.t1); }}>
+                  <div className="ann-item-swatch" style={{ background: color(ann) }} />
                   <div className="ann-item-body">
                     <div className="ann-item-name" title={ann.name}>{ann.name}</div>
+                    {ann.category && (
+                      <div style={{ fontFamily:'var(--mono)', fontSize:8, color: color(ann), letterSpacing:'0.1em', textTransform:'uppercase' }}>
+                        {window.HariaCatLabel ? window.HariaCatLabel(ann.category) : ann.category}
+                      </div>
+                    )}
                     <div className="ann-item-times">{fmtSec(ann.t1)} → {fmtSec(ann.t2)}</div>
                   </div>
-                  <span className="ann-item-del" onClick={() => onDelete(ann.id)} title="Delete">✕</span>
+                  <span className="ann-item-del" title="Delete"
+                    onClick={e => {
+                      e.stopPropagation();
+                      if (confirm(`Delete annotation "${ann.name}"?`)) onDelete(ann.id);
+                    }}>✕</span>
                 </div>
               ))
             )}
