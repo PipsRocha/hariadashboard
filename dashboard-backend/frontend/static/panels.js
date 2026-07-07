@@ -103,6 +103,7 @@ function Panel({ panel, topicMeta, onClose, onBringToFront, zIndex, currentTime 
   const [legend, setLegend]     = useState([]);
   const chartRef  = useRef();
   const lastFetch = useRef(0);
+  const abortRef  = useRef(null);
 
   useEffect(() => {
     if (!panel.slug) return;
@@ -113,13 +114,21 @@ function Panel({ panel, topicMeta, onClose, onBringToFront, zIndex, currentTime 
       const t = currentTime !== null ? `?t=${currentTime}&ts=${now}` : `?ts=${now}`;
       setImgSrc(`${_API}/topics/image/${panel.slug}${t}`);
     } else {
-      const q = currentTime !== null ? `?t=${currentTime}&window=10` : '';
-      fetch(`${_API}/topics/data/${panel.slug}${q}`)
+      // Charts need the numeric fields of the whole window but not the heavy
+      // _raw payloads; JSON/table views need _raw but only the newest entry.
+      const slim = panelType === 'chart' ? '&raw=0' : '&limit=1';
+      const q = currentTime !== null ? `?t=${currentTime}&window=10${slim}` : '';
+      if (abortRef.current) abortRef.current.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      fetch(`${_API}/topics/data/${panel.slug}${q}`, { signal: ctrl.signal })
         .then(r => r.ok ? r.json() : null)
         .then(d => d && setData(d))
         .catch(() => {});
     }
   }, [currentTime, panel.slug, panelType]);
+
+  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
 
   useEffect(() => {
     if (panelType !== 'chart' || !chartRef.current) return;
