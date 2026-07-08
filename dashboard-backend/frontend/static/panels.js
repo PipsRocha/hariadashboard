@@ -78,6 +78,32 @@ function drawChart(canvas, entries, currentTime) {
   return legend;
 }
 
+/* ── Table flattening ──────────────────────────────────────────────── */
+
+// Flatten a decoded message into [dottedKey, displayValue] rows so nested
+// structs render as a real field/value table instead of JSON blobs.
+function flattenForTable(obj, prefix = '', out = [], depth = 0) {
+  if (depth > 6 || out.length > 300) return out;
+  const fmtNum = v => (Number.isInteger(v) ? String(v) : v.toFixed(4));
+
+  if (Array.isArray(obj)) {
+    // Numeric arrays stay on one row; arrays of objects expand by index.
+    if (obj.every(v => typeof v === 'number')) {
+      out.push([prefix || 'value', obj.map(fmtNum).join(', ')]);
+    } else {
+      obj.forEach((v, i) => flattenForTable(v, `${prefix}[${i}]`, out, depth + 1));
+    }
+  } else if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) {
+      if (k.startsWith('_')) continue;          // hide _raw internals
+      flattenForTable(v, prefix ? `${prefix}.${k}` : k, out, depth + 1);
+    }
+  } else {
+    out.push([prefix || 'value', typeof obj === 'number' ? fmtNum(obj) : String(obj)]);
+  }
+  return out;
+}
+
 /* ── 2D trajectory plot ────────────────────────────────────────────── */
 
 // Find an x/y series in windowed entries: paired dotted keys
@@ -579,13 +605,14 @@ function Panel({ panel, topicMeta, onClose, onBringToFront, zIndex, currentTime 
           </table>
         </div>
       );
+      const rows = flattenForTable(raw);
       return (
         <div className="panel-table-wrap">
           <table className="pt-table">
             <thead><tr><th>Field</th><th>Value</th></tr></thead>
             <tbody>
-              {Object.entries(raw).map(([k, v]) => (
-                <tr key={k}><td>{k}</td><td>{typeof v === 'object' ? JSON.stringify(v).slice(0, 100) : String(v)}</td></tr>
+              {rows.map(([k, v]) => (
+                <tr key={k}><td>{k}</td><td>{v}</td></tr>
               ))}
             </tbody>
           </table>
