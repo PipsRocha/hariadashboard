@@ -727,7 +727,15 @@ window.HariaPanelArea = PanelArea;
 
 /* ── Annotations Sidebar ───────────────────────────────────────────── */
 
-function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collapsed, onToggle }) {
+function fmtSec(sec) {
+    if (!isFinite(sec)) return '—';
+    const m  = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s  = String(Math.floor(sec % 60)).padStart(2, '0');
+    const ms = String(Math.round((sec % 1) * 1000)).padStart(3, '0');
+    return `${m}:${s}.${ms}`;
+  }
+
+function AnnotationsSidebar({ annotations, onDelete, onUpdate, onImport, onExport, collapsed, onToggle }) {
   const [importErr, setImportErr] = useState('');
   const [hasSel, setHasSel]       = useState(false);
   const fileRef = useRef();
@@ -749,13 +757,7 @@ function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collaps
     return ANN_COLORS[Math.max(0, idx) % ANN_COLORS.length];
   }
 
-  function fmtSec(sec) {
-    if (!isFinite(sec)) return '—';
-    const m  = String(Math.floor(sec / 60)).padStart(2, '0');
-    const s  = String(Math.floor(sec % 60)).padStart(2, '0');
-    const ms = String(Math.round((sec % 1) * 1000)).padStart(3, '0');
-    return `${m}:${s}.${ms}`;
-  }
+  
 
   function handleImport(file) {
     setImportErr('');
@@ -829,30 +831,53 @@ function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collaps
               </div>
             ) : (
               annotations.map(ann => (
-                <div key={ann.id} className="ann-item" style={{ cursor:'pointer' }}
-                  title="Click to jump to this annotation"
-                  onClick={() => { if (window._hariaJumpTo) window._hariaJumpTo(ann.t1); }}>
-                  <div className="ann-item-swatch" style={{ background: color(ann) }} />
-                  <div className="ann-item-body">
-                    <div className="ann-item-name" title={ann.name}>{ann.name}</div>
-                    {ann.category && (
-                      <div style={{ fontFamily:'var(--mono)', fontSize:8, color: color(ann), letterSpacing:'0.1em', textTransform:'uppercase' }}>
-                        {window.HariaCatLabel ? window.HariaCatLabel(ann.category) : ann.category}
-                      </div>
-                    )}
-                    <div className="ann-item-times">{fmtSec(ann.t1)} → {fmtSec(ann.t2)}</div>
-                  </div>
-                  <span className="ann-item-del" title="Delete"
-                    onClick={e => {
-                      e.stopPropagation();
-                      if (confirm(`Delete annotation "${ann.name}"?`)) onDelete(ann.id);
-                    }}>✕</span>
-                </div>
-              ))
+  <AnnItem key={ann.id} ann={ann} color={color} onDelete={onDelete} onUpdate={onUpdate} />
+))
             )}
           </div>
         </>
       )}
+    </div>
+  );
+}
+function AnnItem({ ann, color, onDelete, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const cats = window.HARIA_ANN_CATEGORIES || [];
+
+  return (
+    <div className="ann-item" style={{ cursor: 'pointer' }}
+      title="Click to jump to this annotation"
+      onClick={() => { if (window._hariaJumpTo) window._hariaJumpTo(ann.t1); }}>
+      <div className="ann-item-swatch" style={{ background: color(ann) }} />
+      <div className="ann-item-body">
+        <div className="ann-item-name" title={ann.name}>{ann.name}</div>
+
+        {editing ? (
+          <select
+            autoFocus
+            value={ann.category || ''}
+            onClick={e => e.stopPropagation()}          /* don't jump */
+            onChange={e => { onUpdate(ann.id, { category: e.target.value || null }); setEditing(false); }}
+            onBlur={() => setEditing(false)}
+            style={{ fontFamily: 'var(--mono)', fontSize: 9, marginTop: 2 }}
+          >
+            <option value="">(none)</option>
+            {cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+        ) : (
+          <div
+            onClick={e => { e.stopPropagation(); setEditing(true); }}   /* edit, don't jump */
+            title="Click to change category"
+            style={{ fontFamily: 'var(--mono)', fontSize: 8, color: color(ann),
+                     letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            {ann.category ? (window.HariaCatLabel ? window.HariaCatLabel(ann.category) : ann.category) : '+ category'}
+          </div>
+        )}
+
+        <div className="ann-item-times">{fmtSec(ann.t1)} → {fmtSec(ann.t2)}</div>
+      </div>
+      <span className="ann-item-del" title="Delete"
+        onClick={e => { e.stopPropagation(); if (confirm(`Delete annotation "${ann.name}"?`)) onDelete(ann.id); }}>✕</span>
     </div>
   );
 }

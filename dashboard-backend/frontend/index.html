@@ -452,6 +452,9 @@ function Dashboard({ mode, onStop }) {
   function handleAddPanel(meta, type) { if (window._hariaAddPanel) window._hariaAddPanel(meta, type); }
   function handleAddAnnotation(ann)   { setAnnotations(a => [...a, ann]); setAnnCollapsed(false); }
   function handleDeleteAnnotation(id) { setAnnotations(a => a.filter(a => a.id !== id)); }
+  function handleUpdateAnnotation(id, patch) {
+  setAnnotations(a => a.map(x => x.id === id ? { ...x, ...patch } : x));
+}
   function handleImport(arr) { setAnnotations(a => [...a, ...arr]); }
   function handleExport() {
     const blob = new Blob([JSON.stringify(annotations, null, 2)], { type:'application/json' });
@@ -507,6 +510,7 @@ function Dashboard({ mode, onStop }) {
       <window.HariaAnnotationsSidebar
         annotations={annotations}
         onDelete={handleDeleteAnnotation}
+        onUpdate={handleUpdateAnnotation}
         onImport={handleImport}
         onExport={handleExport}
         collapsed={annCollapsed}
