@@ -90,34 +90,38 @@ class SessionCache:
 
     # -- image frames --------------------------------------------------------
 
+    def _frame_index(self, tdir: Path, slug: str) -> Optional[_FrameIndex]:
+        """Return the cached frame index, rescanning only when mtime changes."""
+        try:
+            mt = tdir.stat().st_mtime_ns
+        except FileNotFoundError:
+            self._frames.pop(slug, None)
+            return None
+
+        c = self._frames.get(slug)
+        if c is None or mt != c.mtime_ns:
+            pairs = []
+            for f in tdir.glob("*.jpg"):
+                if f.stem == "latest":
+                    continue
+                try:
+                    pairs.append((float(f.stem), f.name))
+                except ValueError:
+                    continue
+            pairs.sort()
+            c = self._frames[slug] = _FrameIndex(
+                mtime_ns=mt,
+                ts=[p[0] for p in pairs],
+                names=[p[1] for p in pairs],
+            )
+        return c
+
     def nearest_frame(self, tdir: Path, slug: str, t: float) -> Optional[Path]:
         """Path of the JPEG frame closest to t, rescanning the directory only
         when its mtime changes."""
         with self._lock:
-            try:
-                mt = tdir.stat().st_mtime_ns
-            except FileNotFoundError:
-                self._frames.pop(slug, None)
-                return None
-
-            c = self._frames.get(slug)
-            if c is None or mt != c.mtime_ns:
-                pairs = []
-                for f in tdir.glob("*.jpg"):
-                    if f.stem == "latest":
-                        continue
-                    try:
-                        pairs.append((float(f.stem), f.name))
-                    except ValueError:
-                        continue
-                pairs.sort()
-                c = self._frames[slug] = _FrameIndex(
-                    mtime_ns=mt,
-                    ts=[p[0] for p in pairs],
-                    names=[p[1] for p in pairs],
-                )
-
-            if not c.ts:
+            c = self._frame_index(tdir, slug)
+            if c is None or not c.ts:
                 return None
             i = bisect_left(c.ts, t)
             best = min(
@@ -125,6 +129,12 @@ class SessionCache:
                 key=lambda j: abs(c.ts[j] - t),
             )
             return tdir / c.names[best]
+
+    def frame_times(self, tdir: Path, slug: str) -> list:
+        """Sorted list of frame timestamps for a topic (for the video panel)."""
+        with self._lock:
+            c = self._frame_index(tdir, slug)
+            return list(c.ts) if c else []
 
 
 session_cache = SessionCache()

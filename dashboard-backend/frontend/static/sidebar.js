@@ -11,18 +11,20 @@ const _API = API;
 
 const PANEL_TYPES = [
   { id: 'image',    label: 'Image' },
+  { id: 'video',    label: 'Video' },
   { id: 'chart',    label: 'Line Chart' },
+  { id: 'plot2d',   label: '2D Plot' },
   { id: 'table',    label: 'Table' },
   { id: 'json',     label: 'JSON Inspector' },
-  { id: '3d',       label: '3D / TF' },
   { id: 'audio',    label: 'Audio' },
-  { id: 'plot2d',   label: '2D Plot' },
-  { id: 'timeline', label: 'Timeline' },
+  { id: '3d',       label: '3D / TF' },
 ];
 
 function suggestType(meta) {
   if (!meta) return 'json';
   if (meta.is_image) return 'image';
+  if (meta.is_audio) return 'audio';
+  if (meta.is_tf)    return '3d';
   if (meta.is_table) return 'table';
   if (meta.is_num)   return 'chart';
   return 'json';

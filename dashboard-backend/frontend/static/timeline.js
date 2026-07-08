@@ -434,6 +434,12 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
 
   useEffect(() => { curRef.current = currentTime; }, [currentTime]);
 
+  // Audio panels follow this to play/pause with the playhead.
+  useEffect(() => {
+    window._hariaPlaying = (mode === 'record') || playing;
+    return () => { window._hariaPlaying = false; };
+  }, [mode, playing]);
+
   // The playhead animates at 60fps locally, but propagating every frame to
   // the Dashboard re-renders the whole app (sidebar, all panels) at 60Hz.
   // Emit upstream at ~10Hz; seeks and pauses emit immediately (force).

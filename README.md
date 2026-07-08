@@ -104,6 +104,15 @@ via `GET`/`POST /session/annotations`; they're written to
 `metadata.yaml`, so they travel with the recording. Per-recording access is
 also available at `GET`/`POST /recordings/{name}/annotations`.
 
+**Visualization panels** — click a topic in the sidebar to open a panel;
+change its type from the panel's type button. Types: Image (nearest frame),
+Video (smooth frame playback with preloading), Line Chart and 2D Plot
+(numeric topics — the indexer flattens numeric fields to top-level keys like
+`pose.position.x`), Table, JSON Inspector, Audio (waveform + playback synced
+to the timeline, for `audio_common_msgs` topics — needs the bag's `AudioInfo`
+for correct sample rate), and 3D / TF (frame tree from `/tf` + `/tf_static`,
+rendered with three.js; TF is stored compactly rather than skipped).
+
 **Annotations explorer** — the home screen's third card opens an explorer
 over every `annotations.json` across recordings (`GET
 /recordings/annotations`): group by name, occurrence counts across files,

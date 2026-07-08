@@ -165,8 +165,14 @@ def topic_data(slug: str, t: Optional[float] = None, window: float = 10.0,
 
 
 @router.get("/topics/image/{slug}")
-def topic_image(slug: str, t: Optional[float] = None):
+def topic_image(slug: str, t: Optional[float] = None, frame: Optional[float] = None):
     tdir = _topic_dir(slug)
+
+    # Exact frame (video panel): the frame filename is `{ts:.3f}.jpg`.
+    if frame is not None:
+        exact = tdir / f"{frame:.3f}.jpg"
+        if exact.exists():
+            return FileResponse(str(exact), media_type="image/jpeg")
 
     if t is not None:
         best = session_cache.nearest_frame(tdir, slug, t)
@@ -177,6 +183,28 @@ def topic_image(slug: str, t: Optional[float] = None):
     if not latest.exists():
         raise HTTPException(404, "No image")
     return FileResponse(str(latest), media_type="image/jpeg")
+
+
+@router.get("/topics/frames/{slug}")
+def topic_frames(slug: str):
+    """Sorted frame timestamps for an image topic (drives the video panel)."""
+    tdir = _topic_dir(slug)
+    return {"slug": slug, "frames": session_cache.frame_times(tdir, slug)}
+
+
+@router.get("/topics/audio/{slug}")
+def topic_audio(slug: str):
+    """Serve the wrapped audio file (audio.wav, or a passthrough audio.<ext>)."""
+    tdir = _topic_dir(slug)
+    media = {
+        "wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac",
+        "ogg": "audio/ogg", "opus": "audio/ogg", "aac": "audio/aac", "m4a": "audio/mp4",
+    }
+    for ext, mtype in media.items():
+        f = tdir / f"audio.{ext}"
+        if f.exists():
+            return FileResponse(str(f), media_type=mtype)
+    raise HTTPException(404, "No audio for this topic")
 
 
 @router.get("/session/range")

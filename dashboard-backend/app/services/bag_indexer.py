@@ -27,6 +27,8 @@ from app.services.session_state import session
 
 # Types too large / not useful to fully deserialise for the dashboard.
 # Their timestamps are still written so the timeline shows coverage.
+# (TFMessage is NOT skipped — the 3D/TF panel needs the transforms; it is
+# stored compactly, not as full _raw.)
 SKIP_TYPES = {
     "std_msgs/msg/String",              # robot_description URDF — huge
     "moveit_msgs/msg/PlanningScene",
@@ -35,11 +37,23 @@ SKIP_TYPES = {
     "moveit_msgs/msg/CollisionObject",
     "rcl_interfaces/msg/ParameterEvent",
     "rosgraph_msgs/msg/Clock",
-    "tf2_msgs/msg/TFMessage",
 }
 
 NUMERIC_HINTS = ["Float", "Int", "UInt", "Bool", "JointState", "Imu",
                  "Wrench", "Twist", "Pose", "Vector3", "Odometry", "NavSatFix"]
+
+
+def is_tf_type(msg_type: str) -> bool:
+    return "tf2_msgs/msg/TFMessage" in msg_type
+
+
+def is_audio_data_type(msg_type: str) -> bool:
+    return ("audio_common_msgs/msg/AudioData" in msg_type
+            or "audio_common_msgs/msg/AudioDataStamped" in msg_type)
+
+
+def is_audio_info_type(msg_type: str) -> bool:
+    return "audio_common_msgs/msg/AudioInfo" in msg_type
 
 
 def slug(topic: str) -> str:
@@ -113,9 +127,14 @@ def _detect_storage(bag_path: Path) -> Optional[str]:
 class _TopicWriter:
     """Per-topic sink with a long-lived file handle. Opening data.jsonl per
     message (the previous approach) dominated indexing time on large bags;
-    latest.json / latest.jpg are only written once, on close()."""
+    latest.json / latest.jpg are only written once, on close().
 
-    def __init__(self, out_dir: Path, topic: str, msg_type: str) -> None:
+    Audio topics also stream chunk bytes to audio.raw and are wrapped into a
+    playable file on close() using `audio_info` (shared dict, populated from
+    the bag's AudioInfo topic if present)."""
+
+    def __init__(self, out_dir: Path, topic: str, msg_type: str,
+                 audio_info: Optional[dict] = None) -> None:
         self.topic    = topic
         self.msg_type = msg_type
         self.tdir     = out_dir / slug(topic)
@@ -124,14 +143,29 @@ class _TopicWriter:
         self._last_entry: Optional[dict] = None
         self._last_img:   Optional[bytes] = None
 
+        self.is_audio = is_audio_data_type(msg_type)
+        self._audio_info = audio_info if audio_info is not None else {}
+        self._audio_raw = (self.tdir / "audio.raw").open("wb") if self.is_audio else None
+        self._audio_bytes = 0
+
     def timestamp_only(self, t: float) -> None:
         self._jsonl.write(json.dumps({"t": t}) + "\n")
+
+    def add_audio(self, t: float, chunk: Optional[bytes]) -> None:
+        if chunk and self._audio_raw is not None:
+            self._audio_raw.write(chunk)
+            self._audio_bytes += len(chunk)
+        self._jsonl.write(json.dumps({"t": t, "type": "audio", "bytes": len(chunk or b"")}) + "\n")
 
     def add(self, t: float, raw: Any, img_bytes: Optional[bytes] = None) -> None:
         if img_bytes is not None:
             (self.tdir / f"{t:.3f}.jpg").write_bytes(img_bytes)
             self._last_img = img_bytes
             entry = {"t": t, "type": "image", "frame": f"{t:.3f}.jpg"}
+        elif is_tf_type(self.msg_type):
+            # Compact per-frame transforms; no _raw (TF is high-frequency)
+            entry = {"t": t, "tf": _extract_tf(raw)}
+            self._last_entry = entry
         else:
             if not isinstance(raw, dict):
                 raw = {"_raw_str": str(raw)}
@@ -152,6 +186,12 @@ class _TopicWriter:
             self._jsonl.close()
         except Exception:
             pass
+        if self._audio_raw is not None:
+            try:
+                self._audio_raw.close()
+            except Exception:
+                pass
+            _finalise_audio(self.tdir, self._audio_bytes, self._audio_info)
         if self._last_img is not None:
             (self.tdir / "latest.jpg").write_bytes(self._last_img)
         if self._last_entry is not None:
@@ -183,6 +223,8 @@ def _new_topic_info(msg_type: str, topic: str, t: float) -> dict:
         "is_image": "Image" in msg_type,
         "is_num":   is_numeric_type(msg_type),
         "is_table": "JointState" in msg_type,
+        "is_tf":    is_tf_type(msg_type),
+        "is_audio": is_audio_data_type(msg_type),
     }
 
 
@@ -210,6 +252,7 @@ def _preprocess_mcap(bag_path: Path, out_dir: Path) -> None:
 
     topic_info: dict = {}
     writers: dict[str, _TopicWriter] = {}
+    audio_info: dict = {}
     t_start = t_end = None
     processed = 0
     last_pct = -1
@@ -239,23 +282,9 @@ def _preprocess_mcap(bag_path: Path, out_dir: Path) -> None:
 
                     w = writers.get(topic)
                     if w is None:
-                        w = writers[topic] = _TopicWriter(out_dir, topic, msg_type)
+                        w = writers[topic] = _TopicWriter(out_dir, topic, msg_type, audio_info)
 
-                    if msg_type in SKIP_TYPES:
-                        w.timestamp_only(t)
-                        continue
-
-                    raw = {}
-                    try:
-                        raw = _decoded_to_dict(decoded)
-                    except Exception:
-                        pass
-
-                    img_bytes = None
-                    if "Image" in msg_type:
-                        img_bytes = _decode_image_bytes(decoded, msg_type)
-
-                    w.add(t, raw, img_bytes)
+                    _handle_message(w, t, msg_type, decoded, audio_info)
     finally:
         for w in writers.values():
             w.close()
@@ -273,6 +302,7 @@ def _preprocess_sqlite(bag_path: Path, out_dir: Path) -> None:
     topic_info: dict = {}
     writers: dict[str, _TopicWriter] = {}
     msg_classes: dict[str, Any] = {}
+    audio_info: dict = {}
     t_start = t_end = None
 
     try:
@@ -301,27 +331,23 @@ def _preprocess_sqlite(bag_path: Path, out_dir: Path) -> None:
 
                 w = writers.get(topic_name)
                 if w is None:
-                    w = writers[topic_name] = _TopicWriter(out_dir, topic_name, msg_type)
+                    w = writers[topic_name] = _TopicWriter(out_dir, topic_name, msg_type, audio_info)
 
                 if msg_type in SKIP_TYPES:
                     w.timestamp_only(t)
                     continue
 
-                raw = {}
-                img_bytes = None
                 try:
                     from rclpy.serialization import deserialize_message
                     if msg_type not in msg_classes:
                         from rosidl_runtime_py.utilities import get_message
                         msg_classes[msg_type] = get_message(msg_type)
                     msg = deserialize_message(bytes(data), msg_classes[msg_type])
-                    raw = _decoded_to_dict(msg)
-                    if "Image" in msg_type:
-                        img_bytes = _decode_image_bytes(msg, msg_type)
                 except Exception:
-                    pass
+                    w.timestamp_only(t)
+                    continue
 
-                w.add(t, raw, img_bytes)
+                _handle_message(w, t, msg_type, msg, audio_info)
 
             conn.close()
     finally:
@@ -329,6 +355,151 @@ def _preprocess_sqlite(bag_path: Path, out_dir: Path) -> None:
             w.close()
 
     _write_index(out_dir, topic_info, t_start or 0, t_end or 0)
+
+
+# ---------------------------------------------------------------------------
+# Per-message dispatch (shared by the mcap and sqlite paths)
+# ---------------------------------------------------------------------------
+
+def _handle_message(w: "_TopicWriter", t: float, msg_type: str,
+                    decoded: Any, audio_info: dict) -> None:
+    if msg_type in SKIP_TYPES:
+        w.timestamp_only(t)
+        return
+    if is_audio_data_type(msg_type):
+        w.add_audio(t, _extract_audio_bytes(decoded))
+        return
+    if is_audio_info_type(msg_type):
+        _capture_audio_info(decoded, audio_info)
+        w.timestamp_only(t)
+        return
+
+    raw = {}
+    try:
+        raw = _decoded_to_dict(decoded)
+    except Exception:
+        pass
+
+    img_bytes = None
+    if "Image" in msg_type:
+        img_bytes = _decode_image_bytes(decoded, msg_type)
+
+    w.add(t, raw, img_bytes)
+
+
+# ---------------------------------------------------------------------------
+# TF extraction
+# ---------------------------------------------------------------------------
+
+def _extract_tf(raw: Any) -> list:
+    """Compact TFMessage → [[parent, child, x,y,z, qx,qy,qz,qw], …].
+    `raw` is the dict from _decoded_to_dict; float precision is preserved."""
+    out = []
+    if not isinstance(raw, dict):
+        return out
+    for tr in (raw.get("transforms") or []):
+        if not isinstance(tr, dict):
+            continue
+        parent = ((tr.get("header") or {}).get("frame_id")) or ""
+        child  = tr.get("child_frame_id") or ""
+        tf = tr.get("transform") or {}
+        tl = tf.get("translation") or {}
+        rt = tf.get("rotation") or {}
+        try:
+            out.append([
+                str(parent), str(child),
+                float(tl.get("x", 0.0)), float(tl.get("y", 0.0)), float(tl.get("z", 0.0)),
+                float(rt.get("x", 0.0)), float(rt.get("y", 0.0)),
+                float(rt.get("z", 0.0)), float(rt.get("w", 1.0)),
+            ])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Audio extraction
+# ---------------------------------------------------------------------------
+
+def _to_bytes(data: Any) -> Optional[bytes]:
+    if data is None:
+        return None
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    try:
+        import numpy as np
+        if isinstance(data, np.ndarray):
+            return data.tobytes()
+    except ImportError:
+        pass
+    try:
+        # array('B', …) or a list/tuple of ints
+        return bytes(bytearray(data))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_audio_bytes(decoded: Any) -> Optional[bytes]:
+    """Raw chunk bytes from AudioData / AudioDataStamped."""
+    data = getattr(decoded, "data", None)
+    if data is None:
+        audio = getattr(decoded, "audio", None)     # AudioDataStamped
+        if audio is not None:
+            data = getattr(audio, "data", None)
+    return _to_bytes(data)
+
+
+def _capture_audio_info(decoded: Any, audio_info: dict) -> None:
+    """Populate the shared audio params dict from an AudioInfo message."""
+    ch   = getattr(decoded, "channels", None)
+    rate = getattr(decoded, "sample_rate", None)
+    fmt  = getattr(decoded, "coding_format", None)
+    if ch:
+        try: audio_info["channels"] = int(ch)
+        except (TypeError, ValueError): pass
+    if rate:
+        try: audio_info["sample_rate"] = int(rate)
+        except (TypeError, ValueError): pass
+    if fmt:
+        audio_info["coding_format"] = str(fmt)
+
+
+# Container formats we cannot rewrap as WAV — keep the concatenated stream.
+_COMPRESSED_AUDIO = {"mp3", "mpeg", "flac", "ogg", "opus", "aac", "m4a"}
+
+
+def _finalise_audio(tdir: Path, nbytes: int, audio_info: dict) -> None:
+    """Wrap the streamed audio.raw into a playable file. PCM streams become
+    audio.wav (16-bit) using AudioInfo params when present; compressed
+    streams (mp3/…) are kept as-is with the right extension."""
+    raw_path = tdir / "audio.raw"
+    if nbytes <= 0:
+        raw_path.unlink(missing_ok=True)
+        return
+
+    fmt = str(audio_info.get("coding_format", "")).lower().strip()
+    if fmt in _COMPRESSED_AUDIO:
+        ext = "mp3" if fmt == "mpeg" else fmt
+        raw_path.replace(tdir / f"audio.{ext}")
+        return
+
+    import wave
+    ch   = int(audio_info.get("channels") or 1) or 1
+    rate = int(audio_info.get("sample_rate") or 16000) or 16000
+    pcm  = raw_path.read_bytes()
+    frame_bytes = 2 * ch
+    if len(pcm) % frame_bytes:
+        pcm = pcm[: len(pcm) - (len(pcm) % frame_bytes)]
+    try:
+        with wave.open(str(tdir / "audio.wav"), "wb") as wf:
+            wf.setnchannels(ch)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(pcm)
+        raw_path.unlink(missing_ok=True)
+    except Exception:
+        # Leave audio.raw in place if wrapping failed
+        pass
 
 
 def _numeric_summary(raw: Any, prefix: str = "", out: Optional[dict] = None,
