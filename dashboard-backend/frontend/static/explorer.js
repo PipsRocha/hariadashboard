@@ -29,8 +29,12 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
   const [err, setErr]           = useState('');
   const [q, setQ]               = useState('');
   const [recFilter, setRec]     = useState('');
+  const [catFilter, setCat]     = useState('');
   const [minCount, setMinCount] = useState(1);
   const [expanded, setExpanded] = useState(null);   // annotation name
+
+  const cats = window.HARIA_ANN_CATEGORIES || [];
+  const catColor = c => (window.HariaCatColor && window.HariaCatColor(c)) || '#888';
 
   useEffect(() => {
     fetch(`${API}/recordings/annotations`)
@@ -45,7 +49,8 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
   const groups = useMemo(() => {
     const filtered = rows.filter(r =>
       (!q || r.name.toLowerCase().includes(q.toLowerCase())) &&
-      (!recFilter || r.recording === recFilter)
+      (!recFilter || r.recording === recFilter) &&
+      (!catFilter || (catFilter === '__none' ? !r.category : r.category === catFilter))
     );
     const byName = {};
     for (const r of filtered) (byName[r.name] = byName[r.name] || []).push(r);
@@ -58,7 +63,7 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
       }))
       .filter(g => g.count >= (minCount || 1))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }, [rows, q, recFilter, minCount]);
+  }, [rows, q, recFilter, catFilter, minCount]);
 
   const shown = groups.reduce((s, g) => s + g.count, 0);
 
@@ -69,6 +74,24 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
     const a    = document.createElement('a');
     a.href = url; a.download = 'haria_annotations_filtered.json'; a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function deleteInstance(item) {
+    if (!confirm(`Delete annotation "${item.name}" from ${item.recording}?`)) return;
+    try {
+      const r = await fetch(`${API}/recordings/${encodeURIComponent(item.recording)}/annotations`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const anns = await r.json();
+      const remaining = (Array.isArray(anns) ? anns : []).filter(a =>
+        item.id != null ? a.id !== item.id : !(a.t1 === item.t1 && a.t2 === item.t2)
+      );
+      const w = await fetch(`${API}/recordings/${encodeURIComponent(item.recording)}/annotations`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(remaining),
+      });
+      if (!w.ok) throw new Error(`HTTP ${w.status}`);
+      setRows(rs => rs.filter(x => x !== item));
+    } catch (e) { setErr(`Delete failed: ${e.message || e}`); }
   }
 
   function relT(item, t) {
@@ -103,6 +126,15 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
         >
           <option value="">All recordings</option>
           {recordings.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select
+          value={catFilter} onChange={e => setCat(e.target.value)}
+          style={{ flex:1, padding:'12px 16px', border:'none', borderRight:'1px solid var(--black)',
+                   background:'transparent', fontFamily:'var(--mono)', fontSize:11, outline:'none', cursor:'pointer' }}
+        >
+          <option value="">All categories</option>
+          {cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          <option value="__none">(uncategorised)</option>
         </select>
         <label style={{ display:'flex', alignItems:'center', gap:8, padding:'0 16px',
                         borderRight:'1px solid var(--black)', fontFamily:'var(--mono)', fontSize:9,
@@ -148,7 +180,12 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--g6)'}
                     onMouseLeave={e => e.currentTarget.style.background = expanded === g.name ? 'var(--g6)' : ''}
                   >
-                    <td style={{ ...td, fontWeight:500 }}>{expanded === g.name ? '▾ ' : '▸ '}{g.name}</td>
+                    <td style={{ ...td, fontWeight:500 }}>
+                      {expanded === g.name ? '▾ ' : '▸ '}
+                      <span style={{ display:'inline-block', width:9, height:9, marginRight:7,
+                                     background: g.items[0].category ? catColor(g.items[0].category) : 'var(--g4)' }} />
+                      {g.name}
+                    </td>
                     <td style={td}>{g.count}</td>
                     <td style={td}>{g.nRecs}</td>
                     <td style={td}>{fmtSec(g.totalDur)}</td>
@@ -156,17 +193,30 @@ function AnnotationsExplorer({ onBack, onOpenRecording }) {
                   </tr>
                   {expanded === g.name && g.items.map((item, i) => (
                     <tr key={`${g.name}-${i}`} style={{ background:'var(--g6)' }}>
-                      <td style={{ ...td, paddingLeft:32, color:'var(--g2)' }}>{item.recording}</td>
+                      <td style={{ ...td, paddingLeft:32, color:'var(--g2)' }}>
+                        <span style={{ display:'inline-block', width:8, height:8, marginRight:7,
+                                       background: item.category ? catColor(item.category) : 'var(--g4)' }} />
+                        {item.recording}
+                        {item.category && (
+                          <span style={{ marginLeft:8, fontSize:9, color: catColor(item.category), letterSpacing:'0.1em', textTransform:'uppercase' }}>
+                            {window.HariaCatLabel ? window.HariaCatLabel(item.category) : item.category}
+                          </span>
+                        )}
+                      </td>
                       <td style={{ ...td, color:'var(--g2)' }} colSpan={2}>
                         {relT(item, item.t1)} → {relT(item, item.t2)}
                       </td>
                       <td style={{ ...td, color:'var(--g2)' }}>
                         {isFinite(item.t2 - item.t1) ? fmtSec(item.t2 - item.t1) : '—'}
                       </td>
-                      <td style={td}>
+                      <td style={{ ...td, whiteSpace:'nowrap' }}>
                         <button className="back-btn" style={{ padding:'4px 10px', fontSize:9 }}
                           onClick={() => onOpenRecording(item.recording, item.t1)}>
                           ▶ Open
+                        </button>
+                        <button className="back-btn" style={{ padding:'4px 10px', fontSize:9, marginLeft:6, color:'var(--danger)', borderColor:'var(--danger)' }}
+                          onClick={() => deleteInstance(item)} title="Delete this annotation from its annotations.json">
+                          🗑
                         </button>
                       </td>
                     </tr>

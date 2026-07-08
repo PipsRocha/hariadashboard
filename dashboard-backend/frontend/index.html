@@ -13,6 +13,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<!-- three.js for the 3D/TF panel (loaded lazily-ish; panel degrades if absent) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>window.HARIA_API = '';  /* same origin — the backend serves this page */</script>
 <script src="/static/sidebar.js"  type="text/babel" data-presets="react"></script>
 <script src="/static/panels.js"   type="text/babel" data-presets="react"></script>
@@ -24,10 +26,71 @@
 const { useState, useEffect, useRef } = React;
 const API = window.HARIA_API;
 
+// ── Annotation categories (shared) ────────────────────────────────────
+// Loaded once from the backend; timeline/panels/explorer read the window
+// globals so every surface colors annotations consistently.
+window.HARIA_ANN_CATEGORIES = [];
+window.HariaCatColor = function (categoryId) {
+  const c = (window.HARIA_ANN_CATEGORIES || []).find(c => c.id === categoryId);
+  return c ? c.color : null;
+};
+window.HariaCatLabel = function (categoryId) {
+  const c = (window.HARIA_ANN_CATEGORIES || []).find(c => c.id === categoryId);
+  return c ? c.label : (categoryId || '');
+};
+async function loadCategories() {
+  try {
+    const r = await fetch(`${API}/recordings/annotations/categories`);
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d)) window.HARIA_ANN_CATEGORIES = d;
+    }
+  } catch {}
+}
+window.HariaAddCategory = async function (label, color) {
+  const r = await fetch(`${API}/recordings/annotations/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, color }),
+  });
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+  const d = await r.json();
+  if (Array.isArray(d)) window.HARIA_ANN_CATEGORIES = d;
+  return window.HARIA_ANN_CATEGORIES;
+};
+
 // ── Home ──────────────────────────────────────────────────────────────
 function Home({ onRecord, onPlayback, onAnnotations, onOpenRecording }) {
   const [recordings, setRecordings] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  // Height of the cards grid in px; null = natural height. Persisted so the
+  // chosen split between cards and the recordings list survives reloads.
+  const [cardsH, setCardsH] = useState(() => {
+    const v = parseInt(localStorage.getItem('haria_home_split') || '', 10);
+    return Number.isFinite(v) ? v : null;
+  });
+  const cardsRef = useRef();
+
+  function onDividerDown(e) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = cardsRef.current ? cardsRef.current.getBoundingClientRect().height : 0;
+    function onMove(e2) {
+      const h = Math.round(Math.max(64, Math.min(window.innerHeight * 0.7, startH + e2.clientY - startY)));
+      setCardsH(h);
+      localStorage.setItem('haria_home_split', String(h));
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function resetDivider() {
+    setCardsH(null);
+    localStorage.removeItem('haria_home_split');
+  }
 
   useEffect(() => {
     fetch(`${API}/recordings`)
@@ -55,7 +118,9 @@ function Home({ onRecord, onPlayback, onAnnotations, onOpenRecording }) {
         <div className="brand-sub">Failure Dashboard · ROS 2 Jazzy</div>
       </div>
       <div style={{ display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <div className="mode-cards" style={{ gridTemplateColumns:'1fr 1fr 1fr', borderBottom:'2px solid var(--black)', flexShrink:0 }}>
+        <div className="mode-cards" ref={cardsRef}
+             style={{ gridTemplateColumns:'1fr 1fr 1fr', flexShrink:0,
+                      height: cardsH != null ? cardsH : 'auto', overflow:'hidden' }}>
           <div className="mode-card" style={{ padding:'34px 40px' }} onClick={onRecord}>
             <div className="card-num">01 / RECORD</div>
             <div className="card-line" />
@@ -76,8 +141,21 @@ function Home({ onRecord, onPlayback, onAnnotations, onOpenRecording }) {
           </div>
         </div>
 
+        {/* Draggable divider — drag to resize the split, double-click to reset */}
+        <div
+          onMouseDown={onDividerDown}
+          onDoubleClick={resetDivider}
+          title="Drag to resize · double-click to reset"
+          style={{ height:10, flexShrink:0, cursor:'ns-resize', borderTop:'2px solid var(--black)',
+                   display:'flex', alignItems:'center', justifyContent:'center', userSelect:'none' }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--g6)'}
+          onMouseLeave={e => e.currentTarget.style.background = ''}
+        >
+          <div style={{ width:36, height:3, background:'var(--g4)' }} />
+        </div>
+
         {/* Local recordings */}
-        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minHeight:0 }}>
           <div style={{ padding:'12px 48px', borderBottom:'1px solid var(--black)', fontFamily:'var(--mono)',
                         fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase', color:'var(--g3)',
                         display:'flex', justifyContent:'space-between' }}>
@@ -456,6 +534,8 @@ function App() {
   const [screen, setScreen]     = useState('home');
   const [mode, setMode]         = useState(null);
   const [autoOpen, setAutoOpen] = useState(null);
+
+  useEffect(() => { loadCategories(); }, []);
 
   function openRecording(name, seekT) {
     // A pending seek target is honoured by the timeline once the session loads

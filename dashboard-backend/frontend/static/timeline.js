@@ -28,6 +28,12 @@ function annColor(name, allNames) {
   const idx = [...new Set(allNames)].indexOf(name);
   return ANN_COLORS[Math.max(0, idx) % ANN_COLORS.length];
 }
+// Category color when the annotation has one; greyscale-by-name fallback
+// keeps annotations from before categories existed readable.
+function annFill(ann, allNames) {
+  return (ann.category && window.HariaCatColor && window.HariaCatColor(ann.category))
+      || annColor(ann.name, allNames);
+}
 
 /* ─────────────────────────────────────────────
    useViewport — independent pan+zoom per strip
@@ -118,6 +124,12 @@ function AnnNamePopup({ existingNames, style, onConfirm, onCancel }) {
   const [value, setValue]       = useState('');
   const [sugg, setSugg]         = useState([]);
   const [showSugg, setShowSugg] = useState(false);
+  const [cats, setCats]         = useState(window.HARIA_ANN_CATEGORIES || []);
+  const [cat, setCat]           = useState((window.HARIA_ANN_CATEGORIES || [])[0]?.id || null);
+  const [creating, setCreating] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const [newColor, setNewColor] = useState('#5b8def');
+  const [catErr, setCatErr]     = useState('');
   const inputRef = useRef();
 
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 20); }, []);
@@ -128,12 +140,60 @@ function AnnNamePopup({ existingNames, style, onConfirm, onCancel }) {
   }
   function confirm(name) {
     const n = (name !== undefined ? name : value).trim();
-    if (n) onConfirm(n);
+    if (n) onConfirm(n, cat);
   }
+  async function createCategory() {
+    setCatErr('');
+    try {
+      const list = await window.HariaAddCategory(newLabel.trim(), newColor);
+      setCats([...list]);
+      const created = list.find(c => c.label === newLabel.trim());
+      if (created) setCat(created.id);
+      setCreating(false); setNewLabel('');
+    } catch (e) { setCatErr(String(e.message || e)); }
+  }
+
+  const chip = (selected, color) => ({
+    display:'flex', alignItems:'center', gap:5, padding:'3px 8px', cursor:'pointer',
+    fontFamily:'var(--mono)', fontSize:9, letterSpacing:'0.05em',
+    border:`1px solid ${selected ? 'var(--black)' : 'var(--g5)'}`,
+    background: selected ? 'var(--g6)' : 'transparent',
+  });
 
   return (
     <div className="ann-name-popup" style={style}>
-      <div className="ann-name-popup-head">Annotation name</div>
+      <div className="ann-name-popup-head">Annotation</div>
+
+      {/* Category picker */}
+      <div style={{ display:'flex', flexWrap:'wrap', gap:4, margin:'6px 0 8px' }}>
+        {cats.map(c => (
+          <div key={c.id} style={chip(cat === c.id, c.color)} onClick={() => setCat(c.id)} title={c.label}>
+            <span style={{ width:8, height:8, background:c.color, flexShrink:0 }} />
+            {c.label}
+          </div>
+        ))}
+        <div style={chip(false)} onClick={() => setCreating(v => !v)} title="Create a new category">
+          + New
+        </div>
+      </div>
+      {creating && (
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
+          <input
+            placeholder="Category label…" value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && newLabel.trim()) createCategory(); }}
+            style={{ flex:1, border:'none', borderBottom:'1px solid var(--g5)', background:'transparent',
+                     fontFamily:'var(--mono)', fontSize:11, outline:'none', padding:'3px 0' }}
+          />
+          <input type="color" value={newColor} onChange={e => setNewColor(e.target.value)}
+            style={{ width:26, height:22, padding:0, border:'1px solid var(--g5)', background:'transparent', cursor:'pointer' }} />
+          <button className="ann-name-confirm" style={{ padding:'3px 8px' }}
+            disabled={!newLabel.trim()} onClick={createCategory}>Add</button>
+        </div>
+      )}
+      {catErr && <div style={{ fontFamily:'var(--mono)', fontSize:9, color:'var(--danger)', marginBottom:6 }}>{catErr}</div>}
+
+      <div className="ann-name-popup-head">Name</div>
       <div style={{ position: 'relative' }}>
         <input ref={inputRef} className="ann-name-input"
           value={value} placeholder="e.g. fault_onset, recovery…"
@@ -219,7 +279,7 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
             <div key={ann.id} style={{
               position:'absolute', top:8, bottom:8,
               left:`${x1pct}%`, width:`${x2pct - x1pct}%`,
-              background: annColor(ann.name, allAnnNames), opacity:0.18,
+              background: annFill(ann, allAnnNames), opacity:0.25,
             }} />
           );
         })}
@@ -244,7 +304,7 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
    AnnotationStrip — independent viewport
    exposes pendingSelection to parent via callback
 ───────────────────────────────────────────── */
-function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup }) {
+function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup, onJump }) {
   const ref = useRef();
   const { vp, pan, zoom } = useViewport();
   const [hovered, setHovered] = useState(null);
@@ -314,19 +374,23 @@ function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pending
             if (gf2 < vp.start || gf1 > vp.end) return null;
             const x1pct = Math.max(0, (gf1 - vp.start) / viewWidth * 100);
             const x2pct = Math.min(100, (gf2 - vp.start) / viewWidth * 100);
-            const color  = annColor(ann.name, allAnnNames);
+            const color  = annFill(ann, allAnnNames);
             return (
               <div key={ann.id} className="ann-block"
-                style={{ left:`${x1pct}%`, width:`${x2pct-x1pct}%`, background:color, opacity: hovered===ann.id ? 0.9 : 0.65 }}
+                style={{ left:`${x1pct}%`, width:`${x2pct-x1pct}%`, background:color,
+                         opacity: hovered===ann.id ? 0.9 : 0.65, cursor:'pointer' }}
                 onMouseEnter={() => setHovered(ann.id)}
                 onMouseLeave={() => setHovered(null)}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={() => onJump && onJump(ann.t1)}
               >
                 <span className="ann-block-label">{ann.name}</span>
                 {hovered === ann.id && (
                   <div className="ann-tooltip">
-                    <strong>{ann.name}</strong><br/>
+                    <strong>{ann.name}</strong>
+                    {ann.category ? <> · {window.HariaCatLabel ? window.HariaCatLabel(ann.category) : ann.category}</> : null}<br/>
                     {fmtSec(ann.t1-(tStart||0))} → {fmtSec(ann.t2-(tStart||0))}<br/>
-                    dur: {fmtSec(ann.t2-ann.t1)}
+                    dur: {fmtSec(ann.t2-ann.t1)} · click to jump
                   </div>
                 )}
               </div>
@@ -369,6 +433,12 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
   const duration = Math.max(1, (tEnd||0) - (tStart||0));
 
   useEffect(() => { curRef.current = currentTime; }, [currentTime]);
+
+  // Audio panels follow this to play/pause with the playhead.
+  useEffect(() => {
+    window._hariaPlaying = (mode === 'record') || playing;
+    return () => { window._hariaPlaying = false; };
+  }, [mode, playing]);
 
   // The playhead animates at 60fps locally, but propagating every frame to
   // the Dashboard re-renders the whole app (sidebar, all panels) at 60Hz.
@@ -422,6 +492,20 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
     return () => cancelAnimationFrame(rafRef.current);
   }, [mode, playing, tStart, tEnd]);
 
+  function jumpTo(t) {
+    if (t == null || !isFinite(t)) return;
+    const clamped = Math.max(tStart || t, Math.min(tEnd || t, t));
+    curRef.current = clamped;
+    setCurrent(clamped);
+    emitTime(clamped, true);
+  }
+
+  // Expose for the annotations sidebar (click an item to jump to it)
+  useEffect(() => {
+    window._hariaJumpTo = jumpTo;
+    return () => { window._hariaJumpTo = null; };
+  });
+
   function togglePlay() {
     if (!tEnd) return;   // no session range loaded yet
     if (!playing) {
@@ -443,11 +527,11 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
     if (window._hariaPendingSelection) setShowPopup(true);
   };
 
-  function confirmAnnotation(name) {
+  function confirmAnnotation(name, category) {
     if (!pendingSel) return;
     const t1 = (tStart||0) + pendingSel.f1 * duration;
     const t2 = (tStart||0) + pendingSel.f2 * duration;
-    onAddAnnotation({ id: Date.now(), name, t1, t2 });
+    onAddAnnotation({ id: Date.now(), name, category: category || null, t1, t2 });
     setPendingSel(null); setShowPopup(false);
   }
 
@@ -511,6 +595,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         showPopup={showPopup}
         onConfirm={confirmAnnotation}
         onCancelPopup={() => { setShowPopup(false); setPendingSel(null); }}
+        onJump={jumpTo}
       />
     </div>
   );
