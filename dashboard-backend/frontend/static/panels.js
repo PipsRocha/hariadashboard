@@ -797,10 +797,10 @@ function AnnotationsSidebar({ annotations, onDelete, onImport, onExport, collaps
               className="ann-sb-add-btn"
               onClick={handleAddClick}
               disabled={!hasSel}
-              title={hasSel ? 'Name and save the current selection' : 'First drag a selection on the annotation timeline below'}
+              title={hasSel ? 'Name and save the current selection (shortcut: n)' : 'First drag a selection on the annotation timeline below'}
             >
               <span className="plus">+</span>
-              {hasSel ? 'Add annotation' : 'Select a range first'}
+              {hasSel ? 'Add annotation  ·  n' : 'Select a range first'}
             </button>
           </div>
 
