@@ -55,6 +55,20 @@ function computeTimeTicks(vp, duration) {
   return ticks;
 }
 
+// Live (record) scale: instead of re-fitting the whole growing session every
+// frame — which makes the axis rescale continuously and pins the playhead to
+// the right edge — snap the displayed span to a stable stepped bound with
+// ~10% headroom. The playhead then sweeps 0 → right at a fixed scale and the
+// axis only jumps out occasionally (when elapsed crosses a bound), not every
+// frame.
+const LIVE_BOUNDS = [60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200,
+                     10800, 14400, 21600, 28800, 43200, 86400];
+function liveDuration(elapsed) {
+  const need = Math.max(1, elapsed) / 0.9;   // keep the playhead ≤ ~90%
+  for (const b of LIVE_BOUNDS) if (b >= need) return b;
+  return Math.ceil(need / 3600) * 3600;
+}
+
 const ANN_COLORS = ['#0a0a0a','#4a4a4a','#888','#1a1a1a','#666','#aaa'];
 function annColor(name, allNames) {
   const idx = [...new Set(allNames)].indexOf(name);
@@ -259,10 +273,10 @@ function AnnNamePopup({ existingNames, style, onConfirm, onCancel }) {
 /* ─────────────────────────────────────────────
    ScrubberStrip — independent viewport
 ───────────────────────────────────────────── */
-function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
+function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek, liveDur }) {
   const ref = useRef();
   const { vp, pan, zoom } = useViewport();
-  const duration   = Math.max(1, (tEnd || 0) - (tStart || 0));
+  const duration   = liveDur != null ? liveDur : Math.max(1, (tEnd || 0) - (tStart || 0));
   const viewWidth  = vp.end - vp.start;
   const allAnnNames = [...new Set((annotations || []).map(a => a.name))];
 
@@ -340,12 +354,12 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
    AnnotationStrip — independent viewport
    exposes pendingSelection to parent via callback
 ───────────────────────────────────────────── */
-function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup, onJump }) {
+function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup, onJump, liveDur }) {
   const ref = useRef();
   const { vp, pan, zoom } = useViewport();
   const [hovered, setHovered] = useState(null);
   const [dragFrac, setDragFrac] = useState(null); // starting frac of current drag
-  const duration  = Math.max(1, (tEnd || 0) - (tStart || 0));
+  const duration  = liveDur != null ? liveDur : Math.max(1, (tEnd || 0) - (tStart || 0));
   const viewWidth = vp.end - vp.start;
   const allAnnNames = [...new Set((annotations || []).map(a => a.name))];
 
@@ -475,7 +489,12 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
   const rafRef = useRef();
   const curRef = useRef(null);
   const lastEmit = useRef(0);
-  const duration = Math.max(1, (tEnd||0) - (tStart||0));
+  // Record mode: display a stable stepped scale anchored at 0, instead of
+  // re-fitting the whole growing session every frame. Null in playback.
+  const elapsedNow = (mode === 'record' && currentTime != null && tStart != null)
+    ? Math.max(0, currentTime - tStart) : null;
+  const liveDur = elapsedNow != null ? liveDuration(elapsedNow) : null;
+  const duration = liveDur != null ? liveDur : Math.max(1, (tEnd||0) - (tStart||0));
 
   useEffect(() => { curRef.current = currentTime; }, [currentTime]);
 
@@ -629,6 +648,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         currentTime={currentTime}
         annotations={annotations}
         onSeek={t => { setCurrent(t); emitTime(t); }}
+        liveDur={liveDur}
       />
 
       {/* Annotation strip — independent viewport */}
@@ -641,6 +661,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         onConfirm={confirmAnnotation}
         onCancelPopup={() => { setShowPopup(false); setPendingSel(null); }}
         onJump={jumpTo}
+        liveDur={liveDur}
       />
     </div>
   );
