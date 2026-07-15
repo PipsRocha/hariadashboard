@@ -55,18 +55,13 @@ function computeTimeTicks(vp, duration) {
   return ticks;
 }
 
-// Live (record) scale: instead of re-fitting the whole growing session every
-// frame — which makes the axis rescale continuously and pins the playhead to
-// the right edge — snap the displayed span to a stable stepped bound with
-// ~10% headroom. The playhead then sweeps 0 → right at a fixed scale and the
-// axis only jumps out occasionally (when elapsed crosses a bound), not every
-// frame.
-const LIVE_BOUNDS = [60, 120, 300, 600, 900, 1800, 2700, 3600, 5400, 7200,
-                     10800, 14400, 21600, 28800, 43200, 86400];
+// Live (record) scale: assume a fixed 0–60 minute axis so the playhead simply
+// sweeps left → right over a stable scale (round tick intervals, no per-frame
+// rescale). If a session runs past 60 min, the axis extends in whole-hour
+// steps and the tick engine shortens the intervals to keep them round.
 function liveDuration(elapsed) {
-  const need = Math.max(1, elapsed) / 0.9;   // keep the playhead ≤ ~90%
-  for (const b of LIVE_BOUNDS) if (b >= need) return b;
-  return Math.ceil(need / 3600) * 3600;
+  if (elapsed <= 3600) return 3600;                 // assume 60 minutes
+  return Math.ceil(elapsed / 3600) * 3600;          // then grow by the hour
 }
 
 const ANN_COLORS = ['#0a0a0a','#4a4a4a','#888','#1a1a1a','#666','#aaa'];
