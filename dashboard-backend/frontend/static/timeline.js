@@ -554,12 +554,9 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
           <div className="tl-label">Topics</div>
           <div className="tl-val">{topicIndex.filter(t => t.active || mode==='playback').length}</div>
         </div>
-        <div className="tl-hcell" style={{ cursor:'pointer' }} onClick={onToggleAnn}>
-          <div className="tl-label">Annotations</div>
-          <div className="tl-val">{annotations.length} · {annCollapsed ? 'show ›' : 'hide ‹'}</div>
-        </div>
+
         <div className="tl-hspacer" />
-        <div style={{ display:'flex', alignItems:'center', fontFamily:'var(--mono)', fontSize:9, color:'var(--g3)', padding:'0 14px', letterSpacing:'0.1em', borderLeft:'1px solid var(--black)' }}>
+        <div style={{ display:'flex', alignItems:'center', fontFamily:'var(--mono)', fontSize:10, color:'var(--g3)', padding:'0 14px', letterSpacing:'0.1em', borderLeft:'1px solid var(--black)' }}>
           scroll=pan · ctrl+scroll=zoom · alt+drag=pan
         </div>
         {mode === 'playback' && (
