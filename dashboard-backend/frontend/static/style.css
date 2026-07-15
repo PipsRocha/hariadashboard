@@ -115,7 +115,7 @@ html, body { height: 100%; background: var(--white); color: var(--black); font-f
 .sb-scroll { flex: 1; overflow-y: auto; }
 .sb-scroll::-webkit-scrollbar { width: 3px; }
 .sb-scroll::-webkit-scrollbar-thumb { background: var(--g5); }
-.sb-group-label { font-family: var(--mono); font-size: 8px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--g4); padding: 8px 14px 4px; }
+.sb-group-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--g4); padding: 8px 14px 4px; }
 .topic-item { padding: 6px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--g6); transition: background 0.1s; }
 .topic-item:hover { background: var(--g6); }
 .topic-item.open { background: var(--black); color: var(--white); }
