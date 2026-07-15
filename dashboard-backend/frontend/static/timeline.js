@@ -23,6 +23,47 @@ function fmtSec(sec) {
 window.HariaFmtTime = fmtTime;
 window.HariaFmtSec  = fmtSec;
 
+/* ─────────────────────────────────────────────
+   Time-axis ticks — round, zoom-aware intervals
+───────────────────────────────────────────── */
+// Allowed step sizes in seconds (1-2-5 progression up to 12 h).
+const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
+                    3600, 7200, 10800, 21600, 43200];
+function niceStep(raw) {
+  for (const s of TICK_STEPS) if (s >= raw) return s;
+  return TICK_STEPS[TICK_STEPS.length - 1];
+}
+function fmtTick(sec, step) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (sec >= 3600 || step >= 3600)
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+// Ticks at round elapsed-time values inside the visible window.
+// vp: {start,end} fractions of the session; duration: total seconds.
+// Returns [{frac, label}] where frac is 0..1 across the *viewport*.
+function computeTimeTicks(vp, duration) {
+  const t0 = vp.start * duration, t1 = vp.end * duration;   // elapsed secs at edges
+  const span = Math.max(1e-3, t1 - t0);
+  const step = niceStep(span / 8);                          // aim for ~8 ticks
+  const first = Math.ceil(t0 / step - 1e-6) * step;
+  const ticks = [];
+  for (let t = first; t <= t1 + 1e-6 && ticks.length < 40; t += step) {
+    ticks.push({ frac: (t - t0) / (t1 - t0), label: fmtTick(t, step) });
+  }
+  return ticks;
+}
+
+// Live (record) scale: assume a fixed 0–60 minute axis so the playhead simply
+// sweeps left → right over a stable scale (round tick intervals, no per-frame
+// rescale). If a session runs past 60 min, the axis extends in whole-hour
+// steps and the tick engine shortens the intervals to keep them round.
+function liveDuration(elapsed) {
+  if (elapsed <= 3600) return 3600;                 // assume 60 minutes
+  return Math.ceil(elapsed / 3600) * 3600;          // then grow by the hour
+}
+
 const ANN_COLORS = ['#0a0a0a','#4a4a4a','#888','#1a1a1a','#666','#aaa'];
 function annColor(name, allNames) {
   const idx = [...new Set(allNames)].indexOf(name);
@@ -227,10 +268,10 @@ function AnnNamePopup({ existingNames, style, onConfirm, onCancel }) {
 /* ─────────────────────────────────────────────
    ScrubberStrip — independent viewport
 ───────────────────────────────────────────── */
-function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
+function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek, liveDur }) {
   const ref = useRef();
   const { vp, pan, zoom } = useViewport();
-  const duration   = Math.max(1, (tEnd || 0) - (tStart || 0));
+  const duration   = liveDur != null ? liveDur : Math.max(1, (tEnd || 0) - (tStart || 0));
   const viewWidth  = vp.end - vp.start;
   const allAnnNames = [...new Set((annotations || []).map(a => a.name))];
 
@@ -245,12 +286,7 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
   const progressVis = (progressGF >= vp.start && progressGF <= vp.end);
   const progressPct = progressVis ? ((progressGF - vp.start) / viewWidth) * 100 : -999;
 
-  const TICK_N = 8;
-  const ticks  = Array.from({ length: TICK_N + 1 }, (_, i) => {
-    const gf = vp.start + (i / TICK_N) * viewWidth;
-    const { m, s } = fmtTime(gf * duration);
-    return `${m}:${s}`;
-  });
+  const ticks = computeTimeTicks(vp, duration);
 
   return (
     <div className="tl-strip scrubber">
@@ -263,6 +299,12 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
         onWheel={handleWheel}
         style={{ cursor: 'ew-resize' }}
       >
+        {/* gridlines at each tick */}
+        {ticks.map((tk, i) => (
+          <div key={'g' + i} style={{ position:'absolute', top:0, bottom:14,
+            left:`${tk.frac * 100}%`, width:1, background:'var(--g5)' }} />
+        ))}
+
         {/* base track */}
         <div style={{ position:'absolute', left:0, right:0, top:'50%', transform:'translateY(-50%)', height:3, background:'var(--g5)' }}>
           <div style={{ height:'100%', width: progressVis ? `${progressPct}%` : '0%', background:'var(--black)' }} />
@@ -289,12 +331,15 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
           <div className="tl-playhead" style={{ left:`${progressPct}%` }} />
         )}
 
-        {/* ticks */}
+        {/* time ticks + labels */}
         <div className="tl-ticks">
-          {ticks.map((t, i) => (
-            <span key={i} style={{ position:'absolute', left:`${(i/TICK_N)*100}%`, transform:'translateX(-50%)' }}>{t}</span>
+          {ticks.map((tk, i) => (
+            <span key={i} style={{ position:'absolute', left:`${tk.frac*100}%`, transform:'translateX(-50%)' }}>{tk.label}</span>
           ))}
         </div>
+        {ticks.map((tk, i) => (
+          <div key={'m' + i} style={{ position:'absolute', bottom:12, left:`${tk.frac*100}%`, width:1, height:5, background:'var(--g3)' }} />
+        ))}
       </div>
     </div>
   );
@@ -304,12 +349,12 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
    AnnotationStrip — independent viewport
    exposes pendingSelection to parent via callback
 ───────────────────────────────────────────── */
-function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup, onJump }) {
+function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pendingSelection, showPopup, onConfirm, onCancelPopup, onJump, liveDur }) {
   const ref = useRef();
   const { vp, pan, zoom } = useViewport();
   const [hovered, setHovered] = useState(null);
   const [dragFrac, setDragFrac] = useState(null); // starting frac of current drag
-  const duration  = Math.max(1, (tEnd || 0) - (tStart || 0));
+  const duration  = liveDur != null ? liveDur : Math.max(1, (tEnd || 0) - (tStart || 0));
   const viewWidth = vp.end - vp.start;
   const allAnnNames = [...new Set((annotations || []).map(a => a.name))];
 
@@ -367,6 +412,15 @@ function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pending
           onWheel={handleWheel}
           style={{ background: 'var(--g6)' }}
         >
+          {/* time gridlines + labels (align annotations to round times) */}
+          {computeTimeTicks(vp, duration).map((tk, i) => (
+            <React.Fragment key={'t' + i}>
+              <div style={{ position:'absolute', top:0, bottom:0, left:`${tk.frac*100}%`, width:1, background:'var(--g5)' }} />
+              <span style={{ position:'absolute', bottom:1, left:`${tk.frac*100}%`, transform:'translateX(-50%)',
+                             fontFamily:'var(--mono)', fontSize:8, color:'var(--g3)', pointerEvents:'none' }}>{tk.label}</span>
+            </React.Fragment>
+          ))}
+
           {/* saved blocks */}
           {(annotations || []).map(ann => {
             const gf1 = (ann.t1 - (tStart || 0)) / duration;
@@ -430,7 +484,12 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
   const rafRef = useRef();
   const curRef = useRef(null);
   const lastEmit = useRef(0);
-  const duration = Math.max(1, (tEnd||0) - (tStart||0));
+  // Record mode: display a stable stepped scale anchored at 0, instead of
+  // re-fitting the whole growing session every frame. Null in playback.
+  const elapsedNow = (mode === 'record' && currentTime != null && tStart != null)
+    ? Math.max(0, currentTime - tStart) : null;
+  const liveDur = elapsedNow != null ? liveDuration(elapsedNow) : null;
+  const duration = liveDur != null ? liveDur : Math.max(1, (tEnd||0) - (tStart||0));
 
   useEffect(() => { curRef.current = currentTime; }, [currentTime]);
 
@@ -581,6 +640,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         currentTime={currentTime}
         annotations={annotations}
         onSeek={t => { setCurrent(t); emitTime(t); }}
+        liveDur={liveDur}
       />
 
       {/* Annotation strip — independent viewport */}
@@ -593,6 +653,7 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
         onConfirm={confirmAnnotation}
         onCancelPopup={() => { setShowPopup(false); setPendingSel(null); }}
         onJump={jumpTo}
+        liveDur={liveDur}
       />
     </div>
   );
