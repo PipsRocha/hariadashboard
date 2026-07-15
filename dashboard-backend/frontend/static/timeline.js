@@ -23,6 +23,38 @@ function fmtSec(sec) {
 window.HariaFmtTime = fmtTime;
 window.HariaFmtSec  = fmtSec;
 
+/* ─────────────────────────────────────────────
+   Time-axis ticks — round, zoom-aware intervals
+───────────────────────────────────────────── */
+// Allowed step sizes in seconds (1-2-5 progression up to 12 h).
+const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
+                    3600, 7200, 10800, 21600, 43200];
+function niceStep(raw) {
+  for (const s of TICK_STEPS) if (s >= raw) return s;
+  return TICK_STEPS[TICK_STEPS.length - 1];
+}
+function fmtTick(sec, step) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (sec >= 3600 || step >= 3600)
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+// Ticks at round elapsed-time values inside the visible window.
+// vp: {start,end} fractions of the session; duration: total seconds.
+// Returns [{frac, label}] where frac is 0..1 across the *viewport*.
+function computeTimeTicks(vp, duration) {
+  const t0 = vp.start * duration, t1 = vp.end * duration;   // elapsed secs at edges
+  const span = Math.max(1e-3, t1 - t0);
+  const step = niceStep(span / 8);                          // aim for ~8 ticks
+  const first = Math.ceil(t0 / step - 1e-6) * step;
+  const ticks = [];
+  for (let t = first; t <= t1 + 1e-6 && ticks.length < 40; t += step) {
+    ticks.push({ frac: (t - t0) / (t1 - t0), label: fmtTick(t, step) });
+  }
+  return ticks;
+}
+
 const ANN_COLORS = ['#0a0a0a','#4a4a4a','#888','#1a1a1a','#666','#aaa'];
 function annColor(name, allNames) {
   const idx = [...new Set(allNames)].indexOf(name);
@@ -245,12 +277,7 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
   const progressVis = (progressGF >= vp.start && progressGF <= vp.end);
   const progressPct = progressVis ? ((progressGF - vp.start) / viewWidth) * 100 : -999;
 
-  const TICK_N = 8;
-  const ticks  = Array.from({ length: TICK_N + 1 }, (_, i) => {
-    const gf = vp.start + (i / TICK_N) * viewWidth;
-    const { m, s } = fmtTime(gf * duration);
-    return `${m}:${s}`;
-  });
+  const ticks = computeTimeTicks(vp, duration);
 
   return (
     <div className="tl-strip scrubber">
@@ -263,6 +290,12 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
         onWheel={handleWheel}
         style={{ cursor: 'ew-resize' }}
       >
+        {/* gridlines at each tick */}
+        {ticks.map((tk, i) => (
+          <div key={'g' + i} style={{ position:'absolute', top:0, bottom:14,
+            left:`${tk.frac * 100}%`, width:1, background:'var(--g5)' }} />
+        ))}
+
         {/* base track */}
         <div style={{ position:'absolute', left:0, right:0, top:'50%', transform:'translateY(-50%)', height:3, background:'var(--g5)' }}>
           <div style={{ height:'100%', width: progressVis ? `${progressPct}%` : '0%', background:'var(--black)' }} />
@@ -289,12 +322,15 @@ function ScrubberStrip({ tStart, tEnd, currentTime, annotations, onSeek }) {
           <div className="tl-playhead" style={{ left:`${progressPct}%` }} />
         )}
 
-        {/* ticks */}
+        {/* time ticks + labels */}
         <div className="tl-ticks">
-          {ticks.map((t, i) => (
-            <span key={i} style={{ position:'absolute', left:`${(i/TICK_N)*100}%`, transform:'translateX(-50%)' }}>{t}</span>
+          {ticks.map((tk, i) => (
+            <span key={i} style={{ position:'absolute', left:`${tk.frac*100}%`, transform:'translateX(-50%)' }}>{tk.label}</span>
           ))}
         </div>
+        {ticks.map((tk, i) => (
+          <div key={'m' + i} style={{ position:'absolute', bottom:12, left:`${tk.frac*100}%`, width:1, height:5, background:'var(--g3)' }} />
+        ))}
       </div>
     </div>
   );
@@ -367,6 +403,15 @@ function AnnotationStrip({ tStart, tEnd, annotations, onSelectionChange, pending
           onWheel={handleWheel}
           style={{ background: 'var(--g6)' }}
         >
+          {/* time gridlines + labels (align annotations to round times) */}
+          {computeTimeTicks(vp, duration).map((tk, i) => (
+            <React.Fragment key={'t' + i}>
+              <div style={{ position:'absolute', top:0, bottom:0, left:`${tk.frac*100}%`, width:1, background:'var(--g5)' }} />
+              <span style={{ position:'absolute', bottom:1, left:`${tk.frac*100}%`, transform:'translateX(-50%)',
+                             fontFamily:'var(--mono)', fontSize:8, color:'var(--g3)', pointerEvents:'none' }}>{tk.label}</span>
+            </React.Fragment>
+          ))}
+
           {/* saved blocks */}
           {(annotations || []).map(ann => {
             const gf1 = (ann.t1 - (tStart || 0)) / duration;
