@@ -586,6 +586,19 @@ function TimelineContainer({ mode, tStart, tEnd, topicIndex, onTimeChange, onSto
     if (window._hariaPendingSelection) setShowPopup(true);
   };
 
+  // Keyboard: press "n" to name the current selection (same as the + button).
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'n' && e.key !== 'N') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target;
+      if (el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return;
+      if (pendingSel && !showPopup) { e.preventDefault(); setShowPopup(true); }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pendingSel, showPopup]);
+
   function confirmAnnotation(name, category) {
     if (!pendingSel) return;
     const t1 = (tStart||0) + pendingSel.f1 * duration;
