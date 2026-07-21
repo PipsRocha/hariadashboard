@@ -17,12 +17,18 @@ if [ ! -d "$SUBJECT_ROOT" ]; then
   exit 2
 fi
 mkdir -p "$SUBJECT_ROOT/_curation"
-if [ ! -w "$SUBJECT_ROOT/_curation" ]; then
+HOST_USER="$(id -un)"
+HOST_GROUP="$(id -gn "$HOST_USER")"
+UNWRITABLE="$(find "$SUBJECT_ROOT/_curation" ! -writable -print -quit 2>/dev/null || true)"
+if [ -n "$UNWRITABLE" ]; then
   cat >&2 <<EOF
-The curator output is not writable by your host user.
+The curator output contains files that are not writable by $HOST_USER.
+
+First unwritable path:
+  $UNWRITABLE
 
 Repair the existing Docker-created files once with:
-  sudo chown -R $(id -u):$(id -g) "$SUBJECT_ROOT/_curation"
+  sudo chown -R "$HOST_USER:$HOST_GROUP" "$SUBJECT_ROOT/_curation"
 EOF
   exit 1
 fi

@@ -86,7 +86,7 @@ needed for Snap Docker installations that otherwise remap the requested UID.
 Curator directories created by an older image may need a one-time ownership repair:
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" /path/to/subject/_curation
+sudo chown -R "$USER:$(id -gn "$USER")" /path/to/subject/_curation
 ```
 
 Open `http://localhost:8000` after starting `review`. The server is published only on host loopback. Opening an uncached trial starts RGB preview preparation automatically and shows progress in the workspace. The source MCAP remains on the host; previews are written atomically under `_curation/cache` and can be deleted at any time. The cache uses least-recently-used trial eviction with a 20 GB default limit; override it with `HRI_CURATOR_CACHE_MAX_GB`.
