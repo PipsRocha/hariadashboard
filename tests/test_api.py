@@ -8,6 +8,16 @@ import httpx
 from hri_curator.scanner import scan
 
 
+def test_web_workspace_replaces_empty_state():
+    web = Path(__file__).parents[1] / "hri_curator" / "web"
+    css = (web / "style.css").read_text(encoding="utf-8")
+    javascript = (web / "app.js").read_text(encoding="utf-8")
+
+    assert "[hidden]{display:none!important}" in css
+    assert "showWorkspaceMessage('Loading trial...',true)" in javascript
+    assert "$('empty').hidden=true;$('review').hidden=false" in javascript
+
+
 def test_curator_api_hides_paths_and_saves_review(subject: Path, monkeypatch):
     scan(subject)
     monkeypatch.setenv("HRI_CURATOR_ROOT", str(subject))
