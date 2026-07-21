@@ -18,6 +18,8 @@ def test_web_workspace_replaces_empty_state():
     assert "showWorkspaceMessage('Loading trial...',true)" in javascript
     assert "$('empty').hidden=true;$('review').hidden=false" in javascript
     assert "state.subject=await api('/api/subject')" in javascript
+    assert "annotation.confidence<0||annotation.confidence>1" in javascript
+    assert 'id="save-edit"' in (web / "index.html").read_text(encoding="utf-8")
 
 
 def test_curator_api_hides_paths_and_saves_review(subject: Path, monkeypatch):
