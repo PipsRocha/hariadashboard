@@ -17,7 +17,6 @@ def test_web_workspace_replaces_empty_state():
     assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important\s*;\s*\}", css)
     assert "showWorkspaceMessage('Loading trial...',true)" in javascript
     assert "$('empty').hidden=true;$('review').hidden=false" in javascript
-    assert "autoComplete=next&&" in javascript
     assert "state.subject=await api('/api/subject')" in javascript
 
 

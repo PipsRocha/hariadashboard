@@ -43,7 +43,7 @@
           </form>
           <section class="annotations"><h2>Annotations</h2><div class="ann-add"><label>Type<select id="ann-type"><option>anomaly</option><option>human_action</option><option>robot_event</option><option>task_failure</option><option>recovery</option><option>consequence</option><option>uncertain_region</option></select></label><label>Family<input id="ann-family"></label><label>Subtype<input id="ann-subtype"></label><label>Severity<input id="ann-severity"></label><label>Confidence<input id="ann-confidence" type="number" min="0" max="1" step="0.05"></label><label class="ann-primary"><input id="ann-primary" type="checkbox">Primary</label><label class="ann-notes">Notes<input id="ann-notes"></label><div class="ann-actions"><button id="add-point" type="button">Add point</button><button id="mark-start" type="button">Set interval start</button><button id="mark-end" type="button">Add interval</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div></div><div id="annotations"></div></section>
         </div>
-        <footer><span id="save-status"></span><button id="save">Save draft</button><button id="save-next" class="primary">Complete and next</button></footer>
+        <footer><span id="save-status"></span><button id="save">Save</button><button id="save-next" class="primary">Save and next</button></footer>
       </div>
     </section>
   </main>
