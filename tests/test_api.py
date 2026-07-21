@@ -17,6 +17,8 @@ def test_web_workspace_replaces_empty_state():
     assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important\s*;\s*\}", css)
     assert "showWorkspaceMessage('Loading trial...',true)" in javascript
     assert "$('empty').hidden=true;$('review').hidden=false" in javascript
+    assert "autoComplete=next&&" in javascript
+    assert "state.subject=await api('/api/subject')" in javascript
 
 
 def test_curator_api_hides_paths_and_saves_review(subject: Path, monkeypatch):
@@ -36,6 +38,8 @@ def test_curator_api_hides_paths_and_saves_review(subject: Path, monkeypatch):
         review.update({"review_status": "reviewed", "condition_reviewed": "normal", "task_outcome_reviewed": "success", "semantic_validity": "valid", "anomaly_present": False, "usable_for_normal_training": True, "usable_for_anomaly_evaluation": False})
         saved = await client.put(f"/api/trials/{uid}/review", json=review)
         assert saved.status_code == 200 and saved.json()["review_status"] == "reviewed"
+        assert (await client.get("/api/subject")).json()["reviews"]["reviewed"] == 1
+        assert (await client.get("/api/trials?queue=unreviewed")).json() == []
         assert (await client.get("/api/trials/not-a-real-trial")).status_code == 404
     asyncio.run(exercise())
 
