@@ -91,6 +91,48 @@ sudo chown -R "$USER:$(id -gn "$USER")" /path/to/subject/_curation
 
 Open `http://localhost:8000` after starting `review`. The server is published only on host loopback. Opening an uncached trial starts RGB preview preparation automatically and shows progress in the workspace. The source MCAP remains on the host; previews are written atomically under `_curation/cache` and can be deleted at any time. The cache uses least-recently-used trial eviction with a 20 GB default limit; override it with `HRI_CURATOR_CACHE_MAX_GB`.
 
+### Remote review over SSH
+
+Keep the curator and dataset on workstation A and access the browser interface
+from workstation B through an encrypted SSH tunnel. On workstation A, start the
+curator inside `tmux` so it continues running when the SSH session disconnects:
+
+```bash
+ssh jordan@workstation-a
+tmux new -s hri-curator
+
+cd /home/jordan/Documents/hariadashboard
+scripts/hri-curator-docker /home/jordan/my_moveit_bags/federico review \
+  --queue unreviewed
+```
+
+Detach from `tmux` with `Ctrl+B`, then `D`. On workstation B, create the tunnel:
+
+```bash
+ssh -N \
+  -L 18000:127.0.0.1:8000 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  jordan@workstation-a
+```
+
+Keep that terminal open and browse to `http://127.0.0.1:18000`. Port `18000`
+is local to workstation B and can be replaced with another unused local port.
+The dataset remains on workstation A; only API responses and requested preview
+frames pass through the tunnel.
+
+Reconnect to the server session with:
+
+```bash
+ssh jordan@workstation-a
+tmux attach -t hri-curator
+```
+
+Use `Ctrl+C` inside `tmux` to stop the curator. Do not publish port 8000 directly
+to the network: the single-reviewer MVP has no authentication or HTTPS. Avoid
+editing the same subject concurrently from multiple browser sessions.
+
 The fast scan reads both YAML files and bag metadata. `--deep` additionally uses `rosbag2_py` and the Jazzy MCAP plugin for timestamp coverage, frequency, gaps, and phase intervals. A fast result automatically upgrades when deep QC is requested, and a later fast scan never downgrades an unchanged deep result. Scans are incremental by default; use `--force`, `--dry-run`, or `--recheck warnings,failures` as needed.
 
 Scan errors and technical QC outcomes are separate. Missing expected depth produces `PASS_WITH_WARNINGS` and updates modality flags; it does not make an otherwise healthy trial fail.
