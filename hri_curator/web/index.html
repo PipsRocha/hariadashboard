@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HRI Dataset Curator</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/mvp.css">
+</head>
+<body>
+  <header>
+    <div><strong>HRI Dataset Curator</strong><span id="subject"></span></div>
+    <button id="export">Export CSV</button>
+  </header>
+  <main>
+    <aside>
+      <label>Queue<select id="queue"><option value="unreviewed">Unreviewed</option><option value="qc_warnings">QC warnings</option><option value="qc_failures">QC failures</option><option value="needs_second_review">Second review</option><option value="reviewed_anomalies">Reviewed anomalies</option><option value="ambiguous">Ambiguous</option><option value="all">All trials</option></select></label>
+      <label>Task<select id="task"><option value="">All tasks</option></select></label>
+      <div id="summary"></div>
+      <div id="trials"></div>
+    </aside>
+    <section id="workspace">
+      <div id="empty">Select a trial to begin review.</div>
+      <div id="review" hidden>
+        <div class="trial-head"><div><strong id="trial-title"></strong><small id="trial-meta"></small><small id="effective"></small></div><button id="prepare">Prepare preview</button></div>
+        <div class="cameras"><figure><figcaption>Camera 1 RGB</figcaption><div class="image-wrap"><img id="camera1"><span id="missing1">Unavailable</span></div></figure><figure><figcaption>Camera 2 RGB</figcaption><div class="image-wrap"><img id="camera2"><span id="missing2">Unavailable</span></div></figure></div>
+        <div class="transport"><button id="back" title="Previous frame">|&lt;</button><button id="play">Play</button><button id="forward" title="Next frame">&gt;|</button><select id="speed"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option></select><output id="clock">00:00.000</output></div>
+        <input id="timeline" type="range" min="0" max="1" step="1" value="0">
+        <div id="phase-track"></div>
+        <div id="annotation-track" title="Manual annotations"></div>
+        <div class="content-grid">
+          <form id="review-form">
+            <h2>Semantic review</h2>
+            <label>Status<select name="review_status"><option>unreviewed</option><option>in_progress</option><option>reviewed</option><option>needs_second_review</option></select></label>
+            <label>Condition<select name="condition_reviewed"><option value="">Not set</option><option>normal</option><option>anomaly</option><option>ambiguous</option><option>exclude</option></select></label>
+            <label>Task outcome<select name="task_outcome_reviewed"><option value="">Not set</option><option>success</option><option>recovered</option><option>incomplete</option><option>failure</option><option>operator_abort</option><option>robot_abort</option><option>unknown</option></select></label>
+            <label>Semantic validity<select name="semantic_validity"><option value="">Not set</option><option>valid</option><option>questionable</option><option>invalid</option></select></label>
+            <label>Primary anomaly<input name="primary_anomaly_reviewed"></label>
+            <label>Consequence<input name="secondary_consequence_reviewed"></label>
+            <div class="decisions"><label>Anomaly present<select name="anomaly_present"><option value="">Not set</option><option value="true">Yes</option><option value="false">No</option></select></label><label>Normal training<select name="usable_for_normal_training"><option value="">Not set</option><option value="true">Usable</option><option value="false">Not usable</option></select></label><label>Anomaly evaluation<select name="usable_for_anomaly_evaluation"><option value="">Not set</option><option value="true">Usable</option><option value="false">Not usable</option></select></label></div>
+            <label>Exclusion reason<input name="manual_exclusion_reason"></label>
+            <label>Notes<textarea name="notes" rows="4"></textarea></label>
+          </form>
+          <section class="annotations"><h2>Annotations</h2><div class="ann-add"><label>Type<select id="ann-type"><option>anomaly</option><option>human_action</option><option>robot_event</option><option>task_failure</option><option>recovery</option><option>consequence</option><option>uncertain_region</option></select></label><label>Family<input id="ann-family"></label><label>Subtype<input id="ann-subtype"></label><label>Severity<input id="ann-severity"></label><label>Confidence<input id="ann-confidence" type="number" min="0" max="1" step="0.05"></label><label class="ann-primary"><input id="ann-primary" type="checkbox">Primary</label><label class="ann-notes">Notes<input id="ann-notes"></label><div class="ann-actions"><button id="add-point" type="button">Add point</button><button id="mark-start" type="button">Set interval start</button><button id="mark-end" type="button">Add interval</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div></div><div id="annotations"></div></section>
+        </div>
+        <footer><span id="save-status"></span><button id="save">Save</button><button id="save-next" class="primary">Save and next</button></footer>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/docker-daemon-check
+source "$SCRIPT_DIR/docker-daemon-check"
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: scripts/acceptance-docker SUBJECT_ROOT" >&2
+  exit 2
+fi
+
+SUBJECT_ROOT="$(realpath "$1")"
+DOCKER_BIN="${HRI_CURATOR_DOCKER:-docker}"
+IMAGE="${HRI_CURATOR_IMAGE:-hri-curator:jazzy}"
+check_docker_daemon "$DOCKER_BIN"
+TEMP_PARENT="${HRI_CURATOR_ACCEPTANCE_TMPDIR:-$HOME}"
+if [ ! -d "$TEMP_PARENT" ] || [ ! -w "$TEMP_PARENT" ]; then
+  echo "acceptance temporary directory is not writable: $TEMP_PARENT" >&2
+  exit 2
+fi
+# Snap Docker has a private /tmp. Keep bind-mounted acceptance data in the
+# user's visible home tree so the confined daemon sees the directory we create.
+TEMP_ROOT="$(mktemp -d "$TEMP_PARENT/hri-curator-acceptance.XXXXXX")"
+BEFORE="$TEMP_ROOT/source-before.txt"
+AFTER="$TEMP_ROOT/source-after.txt"
+CURATION="$TEMP_ROOT/curation"
+mkdir -p "$CURATION"
+trap 'rm -rf "$TEMP_ROOT"' EXIT
+
+snapshot_source() {
+  find "$SUBJECT_ROOT" -path "$SUBJECT_ROOT/_curation" -prune -o -type f \
+    -printf '%P\t%s\t%T@\n' | sort
+}
+
+run_curator() {
+  "$DOCKER_BIN" run --rm \
+    --userns=host \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -e HRI_CURATOR_CACHE_MAX_GB=20 \
+    -v "$SUBJECT_ROOT:/data/subject:ro" \
+    -v "$CURATION:/data/subject/_curation:rw" \
+    "$IMAGE" hri-curator "$@" --root /data/subject
+}
+
+snapshot_source > "$BEFORE"
+run_curator init --subject-id S_ACCEPT --reviewer acceptance
+run_curator scan --deep
+run_curator export
+
+"$DOCKER_BIN" run --rm \
+  --userns=host \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -e HRI_CURATOR_CACHE_MAX_GB=20 \
+  -v "$SUBJECT_ROOT:/data/subject:ro" \
+  -v "$CURATION:/data/subject/_curation:rw" \
+  "$IMAGE" python3 -c \
+  "from hri_curator.config import layout; from hri_curator.database import Database; from hri_curator.preview import prepare_preview; root='/data/subject'; uid=Database(layout(root).database).row('SELECT trial_uid FROM trials ORDER BY trial_uid LIMIT 1')['trial_uid']; value=prepare_preview(root, uid); assert value['status']=='ready'; print('Prepared', uid)"
+
+"$DOCKER_BIN" run --rm \
+  --userns=host \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$SUBJECT_ROOT:/data/subject:ro" \
+  -v "$CURATION:/data/subject/_curation:rw" \
+  "$IMAGE" python3 -c \
+  "import json; from hri_curator.config import layout; from hri_curator.database import Database; root='/data/subject'; db=Database(layout(root).database); summary=json.load(open(layout(root).reports/'latest_scan_summary.json')); assert summary['scan_errors']==0; assert db.row('SELECT COUNT(*) n FROM trials WHERE scan_status != \'complete\'')['n']==0; assert db.row(\"SELECT COUNT(*) n FROM topic_qc WHERE topic_key LIKE '%_depth' AND required != 0\")['n']==0; assert db.row(\"SELECT COUNT(*) n FROM topic_qc WHERE topic_key='camera2_depth' AND qc_status='FAIL'\")['n']==0; print('Accepted', summary['discovered'], 'trials')"
+
+snapshot_source > "$AFTER"
+if ! cmp -s "$BEFORE" "$AFTER"; then
+  echo "acceptance failed: source files changed" >&2
+  diff -u "$BEFORE" "$AFTER" || true
+  exit 1
+fi
+
+echo "Docker acceptance passed; only the temporary curation overlay changed."

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+check_docker_daemon() {
+  local docker_bin="${1:-docker}"
+  local socket="/var/run/docker.sock"
+
+  if ! command -v "$docker_bin" >/dev/null 2>&1; then
+    echo "docker command not found: $docker_bin" >&2
+    return 2
+  fi
+
+  if "$docker_bin" version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+Cannot connect to the Docker daemon with the current user.
+
+For Snap Docker, refresh its group permissions and daemon socket with:
+  sudo snap disable docker
+  sudo snap enable docker
+
+Then close and reopen the terminal (or run `newgrp docker`) and verify:
+  id
+  ls -l /var/run/docker.sock
+  docker version
+
+The socket should be owned by group `docker`, with mode `srw-rw----`.
+Do not chmod it world-writable. A manual chgrp is also temporary because Snap
+recreates the socket when its daemon restarts.
+EOF
+
+  if [ -S "$socket" ]; then
+    echo >&2
+    echo "Current Docker socket:" >&2
+    ls -l "$socket" >&2 || true
+  fi
+
+  echo >&2
+  echo "Current user groups:" >&2
+  id >&2 || true
+  return 1
+}

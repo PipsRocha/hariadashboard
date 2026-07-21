@@ -1,0 +1,39 @@
+.decisions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.decisions label,
+.ann-add label { margin: 0; }
+.decisions select { min-width: 0; }
+#annotation-track {
+  height: 18px;
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-top: 0;
+}
+.ann-mark {
+  position: absolute;
+  top: 3px;
+  height: 10px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: #c6842c;
+}
+.ann-add {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.ann-primary { display: flex; align-items: center; gap: 7px; }
+.ann-primary input { width: auto; }
+.ann-notes,
+.ann-actions { grid-column: 1 / -1; }
+.ann-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ann-row { cursor: pointer; }
+@media (max-width: 900px) {
+  .decisions { grid-template-columns: 1fr; }
+}

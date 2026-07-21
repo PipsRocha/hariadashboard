@@ -1,0 +1,35 @@
+services:
+  curator:
+    profiles: ["prod"]
+    build: .
+    image: hri-curator:jazzy
+    ports:
+      - "127.0.0.1:${HRI_CURATOR_PORT:-8000}:8000"
+    user: "${HRI_CURATOR_UID:-1000}:${HRI_CURATOR_GID:-1000}"
+    userns_mode: host
+    volumes:
+      - "${HRI_SUBJECT_ROOT:?Set HRI_SUBJECT_ROOT}:/data/subject:ro"
+      - "${HRI_SUBJECT_ROOT:?Set HRI_SUBJECT_ROOT}/_curation:/data/subject/_curation:rw"
+    environment:
+      HOME: /tmp
+      HRI_CURATOR_CACHE_MAX_GB: "${HRI_CURATOR_CACHE_MAX_GB:-20}"
+    command: ["hri-curator", "review", "--root", "/data/subject", "--host", "0.0.0.0", "--port", "8000"]
+
+  curator-dev:
+    profiles: ["dev"]
+    build: .
+    image: hri-curator:jazzy
+    ports:
+      - "127.0.0.1:${HRI_CURATOR_PORT:-8000}:8000"
+    user: "${HRI_CURATOR_UID:-1000}:${HRI_CURATOR_GID:-1000}"
+    userns_mode: host
+    volumes:
+      - ".:/workspace:ro"
+      - "${HRI_SUBJECT_ROOT:?Set HRI_SUBJECT_ROOT}:/data/subject:ro"
+      - "${HRI_SUBJECT_ROOT:?Set HRI_SUBJECT_ROOT}/_curation:/data/subject/_curation:rw"
+    environment:
+      HOME: /tmp
+      PYTHONPATH: /workspace
+      HRI_CURATOR_ROOT: /data/subject
+      HRI_CURATOR_CACHE_MAX_GB: "${HRI_CURATOR_CACHE_MAX_GB:-20}"
+    command: ["uvicorn", "hri_curator.webapp:app", "--reload", "--reload-dir", "/workspace/hri_curator", "--host", "0.0.0.0", "--port", "8000"]

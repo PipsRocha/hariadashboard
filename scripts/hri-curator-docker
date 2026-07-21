@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/docker-daemon-check
+source "$SCRIPT_DIR/docker-daemon-check"
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: scripts/hri-curator-docker SUBJECT_ROOT COMMAND [ARGS...]" >&2
+  exit 2
+fi
+
+SUBJECT_ROOT="$(realpath "$1")"
+shift
+if [ ! -d "$SUBJECT_ROOT" ]; then
+  echo "subject root does not exist: $SUBJECT_ROOT" >&2
+  exit 2
+fi
+mkdir -p "$SUBJECT_ROOT/_curation"
+if [ ! -w "$SUBJECT_ROOT/_curation" ]; then
+  cat >&2 <<EOF
+The curator output is not writable by your host user.
+
+Repair the existing Docker-created files once with:
+  sudo chown -R $(id -u):$(id -g) "$SUBJECT_ROOT/_curation"
+EOF
+  exit 1
+fi
+
+DOCKER_BIN="${HRI_CURATOR_DOCKER:-docker}"
+check_docker_daemon "$DOCKER_BIN"
+
+CLI_ARGS=("$@")
+if [ "${CLI_ARGS[0]}" = "review" ]; then
+  HAS_HOST=0
+  for ARG in "${CLI_ARGS[@]}"; do
+    if [ "$ARG" = "--host" ]; then HAS_HOST=1; fi
+  done
+  if [ "$HAS_HOST" -eq 0 ]; then CLI_ARGS+=(--host 0.0.0.0); fi
+fi
+
+exec "$DOCKER_BIN" run --rm -it \
+  --userns=host \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -e "HRI_CURATOR_CACHE_MAX_GB=${HRI_CURATOR_CACHE_MAX_GB:-20}" \
+  -p "127.0.0.1:${HRI_CURATOR_PORT:-8000}:8000" \
+  -v "$SUBJECT_ROOT:/data/subject:ro" \
+  -v "$SUBJECT_ROOT/_curation:/data/subject/_curation:rw" \
+  hri-curator:jazzy hri-curator "${CLI_ARGS[@]}" --root /data/subject

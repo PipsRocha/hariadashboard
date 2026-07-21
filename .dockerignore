@@ -1,0 +1,8 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+dashboard-backend/recordings
+dashboard-backend/session_out
+tests

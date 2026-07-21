@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hri-curator"
+version = "0.1.0"
+description = "Offline ROS 2 HRI dataset curator"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.14",
+  "uvicorn[standard]==0.32.1",
+  "pydantic==2.13.4",
+  "PyYAML==6.0.3",
+  "numpy==1.26.4",
+  "anyio==4.8.0",
+]
+
+[project.optional-dependencies]
+test = ["httpx==0.28.1", "pytest==8.4.2"]
+
+[project.scripts]
+hri-curator = "hri_curator.cli:main"
+
+[tool.setuptools.package-data]
+hri_curator = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
