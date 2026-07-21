@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import httpx
@@ -13,7 +14,7 @@ def test_web_workspace_replaces_empty_state():
     css = (web / "style.css").read_text(encoding="utf-8")
     javascript = (web / "app.js").read_text(encoding="utf-8")
 
-    assert "[hidden]{display:none!important}" in css
+    assert re.search(r"\[hidden\]\s*\{\s*display:\s*none\s*!important\s*;\s*\}", css)
     assert "showWorkspaceMessage('Loading trial...',true)" in javascript
     assert "$('empty').hidden=true;$('review').hidden=false" in javascript
 
